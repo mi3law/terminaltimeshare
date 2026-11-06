@@ -1,0 +1,13 @@
+# Kiosk agent: real secrets and runtime state never go in git (SPEC §3, §6)
+agent/config.json
+agent/cache.json
+agent/session.json
+agent/outbox.json
+agent/*.tmp
+agent/agent.log*
+
+# Python / OS noise
+__pycache__/
+*.pyc
+.DS_Store
+Thumbs.db
