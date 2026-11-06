@@ -1,0 +1,7 @@
+{
+  "execUrl": "https://script.google.com/macros/s/PASTE_YOUR_DEPLOYMENT_ID/exec",
+  "agentKey": "PASTE_THE_agentKey_FROM_THE_CONFIG_TAB",
+  "passcode": "CHANGE-ME-teacher-passcode",
+  "pollSec": 30,
+  "testWindows": []
+}
