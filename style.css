@@ -1,0 +1,105 @@
+/* AI Terminal Booking — mobile-first, no frameworks. */
+:root {
+  --bg: #f6f7f9;
+  --card: #ffffff;
+  --ink: #1d2330;
+  --muted: #6b7280;
+  --line: #e3e6eb;
+  --open: #0f766e;
+  --open-bg: #e6f4f2;
+  --booked-bg: #eef0f4;
+  --mine: #6d28d9;
+  --mine-bg: #f1eafe;
+  --blocked-bg: #fbe9e9;
+  --blocked: #a23b3b;
+  --warn-bg: #fff4dc;
+  --warn: #8a5a00;
+  --ok-bg: #e7f6ec;
+  --ok: #17663a;
+  --radius: 10px;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #111418; --card: #1a1f26; --ink: #e8eaed; --muted: #9aa3ae; --line: #2a313b;
+    --open: #5eead4; --open-bg: #12302d; --booked-bg: #222832; --mine: #c4b5fd; --mine-bg: #2a2342;
+    --blocked-bg: #3a1f22; --blocked: #f19a9a; --warn-bg: #3a2e12; --warn: #f5c86a; --ok-bg: #143022; --ok: #86e0a6;
+  }
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font: 16px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--ink);
+}
+.top { padding: 16px 16px 4px; }
+h1 { margin: 0; font-size: 1.4rem; }
+.updated { margin: 4px 0 0; color: var(--muted); font-size: .85rem; }
+.updated.stale { color: var(--warn); }
+main { padding: 0 16px 32px; max-width: 1200px; margin: 0 auto; }
+
+.rules { list-style: none; padding: 0; margin: 8px 0 12px; font-size: .85rem; color: var(--muted); }
+.rules li { padding: 1px 0; }
+.rules li::before { content: "• "; }
+
+.banner, .panel {
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  margin: 0 0 12px;
+  background: var(--ok-bg);
+  color: var(--ok);
+}
+.banner.warn, .panel.warn { background: var(--warn-bg); color: var(--warn); }
+.banner.error, .panel.error { background: var(--blocked-bg); color: var(--blocked); }
+.panel { background: var(--card); color: var(--ink); border: 1px solid var(--line); }
+.panel p { margin: 0 0 10px; }
+
+.grid { display: grid; gap: 12px; grid-template-columns: 1fr; }
+@media (min-width: 900px) { .grid { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
+
+.day { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 10px; }
+.day h2 { font-size: 1rem; margin: 0 0 8px; }
+.day.blocked { background: var(--blocked-bg); color: var(--blocked); }
+.day .note { margin: 0; font-weight: 600; }
+.block { margin-bottom: 10px; }
+.block:last-child { margin-bottom: 0; }
+.block h3 { font-size: .8rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0 0 4px; }
+.block ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+
+.slot {
+  display: flex; justify-content: space-between; gap: 8px; align-items: center;
+  width: 100%; min-height: 40px; padding: 6px 10px;
+  border-radius: 8px; border: 1px solid transparent;
+  background: var(--booked-bg); color: var(--ink);
+  font: inherit; font-size: .9rem; text-align: left;
+}
+.slot .t { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.slot .s { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.slot.open { background: var(--open-bg); color: var(--open); border-color: var(--open); cursor: pointer; font-weight: 600; }
+.slot.open:hover, .slot.open:focus-visible { outline: 2px solid var(--open); outline-offset: 1px; }
+.slot.mine { background: var(--mine-bg); color: var(--mine); font-weight: 600; }
+.slot.blocked { background: var(--blocked-bg); color: var(--blocked); }
+.slot.past { opacity: .5; }
+.slot.released, .slot.now { background: var(--warn-bg); color: var(--warn); }
+
+button {
+  font: inherit; padding: 10px 16px; border-radius: 8px; border: 0; cursor: pointer;
+  background: var(--open); color: #fff; font-weight: 600;
+}
+button.secondary { background: transparent; color: var(--ink); border: 1px solid var(--line); }
+button:disabled { opacity: .6; cursor: default; }
+
+dialog {
+  border: 0; border-radius: 14px; padding: 18px; width: min(420px, calc(100vw - 32px));
+  background: var(--card); color: var(--ink);
+}
+dialog::backdrop { background: rgba(0, 0, 0, .45); }
+dialog h2 { margin: 0 0 12px; font-size: 1.1rem; }
+dialog label { display: block; font-size: .85rem; color: var(--muted); margin: 10px 0 4px; }
+dialog select, dialog input {
+  width: 100%; font: inherit; padding: 10px; border-radius: 8px;
+  border: 1px solid var(--line); background: var(--bg); color: var(--ink);
+}
+.actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+.error { color: var(--blocked); margin: 10px 0 0; }

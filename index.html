@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <title>AI Terminal Booking</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="top">
+    <h1>AI Terminal Booking</h1>
+    <p class="updated" id="updated" aria-live="polite">Loading…</p>
+  </header>
+
+  <main>
+    <ul class="rules" aria-label="House rules">
+      <li>1 booking per day</li>
+      <li>Your own block only</li>
+      <li>Arrive within 5 min or your slot releases</li>
+      <li>Walk-ups are free whenever the machine shows <strong>LOCKED</strong></li>
+      <li>Cancel from your confirmation email</li>
+    </ul>
+
+    <div id="banner" class="banner" role="status" hidden></div>
+    <section id="cancel-panel" class="panel" hidden aria-live="polite"></section>
+
+    <section id="grid" class="grid" aria-label="Booking grid"></section>
+  </main>
+
+  <dialog id="book-dialog">
+    <form method="dialog" id="book-form">
+      <h2 id="book-title">Book a slot</h2>
+      <label for="book-name">Your name</label>
+      <select id="book-name" required></select>
+      <label for="book-code">Class code</label>
+      <input id="book-code" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" required>
+      <p id="book-error" class="error" role="alert" hidden></p>
+      <div class="actions">
+        <button type="button" id="book-cancel" class="secondary">Back</button>
+        <button type="submit" id="book-submit">Book</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="app.js"></script>
+</body>
+</html>
