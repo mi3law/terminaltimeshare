@@ -24,6 +24,9 @@ var SCHOOL_TZ = 'Asia/Riyadh';
 /** Public URL of the booking page (GitHub Pages). Used for the cancel link in emails. */
 var SPA_URL = 'https://YOUR-GITHUB-USERNAME.github.io/terminaltimeshare/';
 
+/** Name used as the email sender, in subject lines, and as the email signature. */
+var MAIL_NAME = 'AI Terminal';
+
 // ============================================================================
 // Fixed parameters (SPEC §2) — do not edit.
 // ============================================================================
@@ -117,7 +120,7 @@ function sendMails_(mails) {
   var allOk = true;
   (mails || []).forEach(function (m) {
     try {
-      MailApp.sendEmail({ to: m.to, subject: m.subject, body: m.body, name: 'AI Terminal' });
+      MailApp.sendEmail({ to: m.to, subject: m.subject, body: m.body, name: MAIL_NAME });
     } catch (mailErr) {
       allOk = false;
       console.error('MailApp failed for ' + m.to + ': ' + mailErr);
@@ -460,13 +463,13 @@ function bookingEmail_(student, date, cls, slot, token) {
   var when = prettyDate_(date) + ', ' + prettyTime_(start) + '–' + prettyTime_(start + SLOT_MINUTES);
   return {
     to: student.email,
-    subject: 'AI terminal booked: ' + when,
+    subject: MAIL_NAME + ' booked: ' + when,
     body: 'Hi ' + student.displayName + ',\n\n' +
-      'You are booked on the AI terminal:\n\n' +
+      'You are booked on the ' + MAIL_NAME + ':\n\n' +
       '  ' + when + ' (Block ' + cls + ', slot ' + cls + slot + ')\n\n' +
       'Arrive within 5 minutes or your slot releases (and still counts as your booking for the day).\n\n' +
       'Need to cancel? Open this link before the slot starts:\n' + cancelLink_(token) + '\n\n' +
-      '— AI Terminal Timeshare'
+      '— ' + MAIL_NAME
   };
 }
 
@@ -475,11 +478,11 @@ function cancelEmail_(email, displayName, date, cls, slot, byTeacher) {
   var when = prettyDate_(date) + ', ' + prettyTime_(start);
   return {
     to: email,
-    subject: 'AI terminal booking cancelled: ' + when,
+    subject: MAIL_NAME + ' booking cancelled: ' + when,
     body: 'Hi ' + displayName + ',\n\n' +
-      'Your AI terminal booking for ' + when + ' (Block ' + cls + ') has been cancelled' +
+      'Your ' + MAIL_NAME + ' booking for ' + when + ' (Block ' + cls + ') has been cancelled' +
       (byTeacher ? ' by your teacher' : '') + '. The slot is open again, and you can book another slot that day.\n\n' +
-      'Booking page: ' + SPA_URL + '\n\n— AI Terminal Timeshare'
+      'Booking page: ' + SPA_URL + '\n\n— ' + MAIL_NAME
   };
 }
 

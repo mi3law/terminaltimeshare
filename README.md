@@ -60,6 +60,7 @@ Delete the hello-world project afterwards.
 3. Edit the two constants at the top:
    - `SCHOOL_TZ`: your school's IANA timezone. The laptop runs on **UTC+3**, so the default is `'Asia/Riyadh'`. **Confirm it's right for your city.** Other UTC+3 zones are `Asia/Kuwait`, `Asia/Qatar`, `Asia/Bahrain`, `Asia/Baghdad`, `Europe/Istanbul` and `Africa/Nairobi`.
    - `SPA_URL`: `https://YOUR-GITHUB-USERNAME.github.io/terminaltimeshare/`. This is where the cancel links in emails point. It's predictable, so set it now even though the page goes up in step 4.
+   - `MAIL_NAME` (optional): the name your emails come from and sign off with. It also appears in subject lines. Default `'AI Terminal'`.
 4. Set the **script** timezone to the same zone. Open **Project Settings** (gear icon) and either pick it under *Time zone*, or tick *Show "appsscript.json" manifest file in editor*, then set `"timeZone": "Asia/Riyadh"` (your zone) in `appsscript.json`.
 5. Save, select `setup` in the function dropdown, and click **Run**. Approve the permissions (Sheets, sending email). `setup()`:
    - creates the tabs **Roster, Bookings, Blocked, Log, Config** with the exact column headers,
