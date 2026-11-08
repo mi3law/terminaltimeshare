@@ -6,8 +6,8 @@
  *
  * Web app routes (one deployment, updated in place — the /exec URL never changes):
  *   GET  ?action=schedule                          → week grid + active roster (public)
- *   POST {action:"book",   rosterId,date,class,slot,classCode}   (classCode checked only when
- *        Config.requireClassCode is ticked; the schedule reports it as classCodeRequired)
+ *   POST {action:"book",   rosterId,date,class,slot,classCode}   (class = block id A, L or B;
+ *        classCode checked only when Config.requireClassCode is ticked — schedule's classCodeRequired)
  *   POST {action:"cancel", token, confirm:false|true}   (confirm:false = preview only)
  *   POST {action:"events", agentKey, events:[...]}       (kiosk agent only)
  * POST bodies are sent as text/plain JSON (no CORS preflight). Every response is JSON.
@@ -33,11 +33,18 @@ var MAIL_NAME = 'AI Terminal';
 // ============================================================================
 
 var SLOT_MINUTES = 15;
-var SLOTS_PER_BLOCK = 6;
 var WINDOW_DAYS = 5;                                    // school days shown/bookable
 var SCHOOL_DAYS = [0, 1, 2, 3, 4];                      // Sun–Thu (0=Sun … 6=Sat); keep in sync with agent/core.py
-var BLOCK_START_MIN = { A: 7 * 60 + 30, B: 13 * 60 };   // A 7:30–9:00, B 1:00–2:30 PM
-var CLASSES = ['A', 'B'];
+// Blocks in time order — keep in sync with agent/core.py. A and B are class blocks: a student books
+// only their own class's block (Roster.class, which may be the name set in Config.blockAName /
+// blockBName). L (lunch) is open to every active student.
+var BLOCKS = ['A', 'L', 'B'];
+var BLOCK_START_MIN = { A: 7 * 60 + 30, L: 10 * 60 + 40, B: 13 * 60 };   // 7:30–9:00, 10:40–11:10, 1:00–2:30 PM
+var BLOCK_SLOTS = { A: 6, L: 2, B: 6 };
+var MAX_SLOTS = 6;                                      // most slots in any block
+var CLASS_BLOCKS = ['A', 'B'];
+var OPEN_BLOCKS = ['L'];
+var LUNCH_LABEL = 'Lunch';
 var LOCK_WAIT_MS = 10000;
 
 var TABS = {
@@ -45,7 +52,7 @@ var TABS = {
   Bookings: ['id', 'date', 'class', 'slot', 'rosterId', 'displayName', 'status', 'cancelToken', 'createdAt'],
   Blocked:  ['date', 'class', 'slot', 'reason'],
   Log:      ['eventId', 'timestamp', 'event', 'rosterId', 'date', 'class', 'slot', 'minutes'],
-  Config:   ['classCode', 'agentKey', 'requireClassCode']
+  Config:   ['classCode', 'agentKey', 'requireClassCode', 'blockAName', 'blockBName']
 };
 /** 1-based column of the date column in each tab that has one (formatted Plain text). */
 var DATE_COL = { Bookings: 2, Blocked: 1, Log: 5 };
@@ -205,6 +212,36 @@ function slotStartMin_(cls, slot) {
   return BLOCK_START_MIN[cls] + (slot - 1) * SLOT_MINUTES;
 }
 
+function slotsIn_(cls) { return BLOCK_SLOTS[cls] || 0; }
+
+function isSlotOf_(cls, slot) { return slot >= 1 && slot <= slotsIn_(cls) && Math.floor(slot) === slot; }
+
+/** What people see: Config's class names (e.g. CD / EF) or "Block A" / "Block B", and "Lunch". */
+function blockLabels_(cfg) {
+  return { A: cfg.blockNames.A || 'Block A', L: LUNCH_LABEL, B: cfg.blockNames.B || 'Block B' };
+}
+
+/** Short slot name for the grid and teacher lists: "CD3", "Lunch 1", or "A3" when no name is set. */
+function slotCode_(cfg, cls, slot) {
+  var short = blockLabels_(cfg)[cls];
+  if (short === 'Block ' + cls) short = cls;
+  return short + (short.length > 3 || /\d$/.test(short) ? ' ' : '') + slot;   // "P1" → "P1 3", not "P13"
+}
+
+/** A typed block/class value → 'A' | 'L' | 'B', or '' if unrecognized. Accepts the letters, "Lunch",
+ *  and the class names in Config (blockAName → A, blockBName → B), ignoring case and spaces. */
+function blockOf_(v, cfg) {
+  var s = str_(v).toUpperCase();
+  if (!s) return '';
+  if (BLOCKS.indexOf(s) >= 0) return s;
+  if (s === LUNCH_LABEL.toUpperCase()) return 'L';
+  for (var i = 0; i < CLASS_BLOCKS.length; i++) {
+    var name = str_(cfg.blockNames[CLASS_BLOCKS[i]]).toUpperCase();
+    if (name && name === s) return CLASS_BLOCKS[i];
+  }
+  return '';
+}
+
 function hhmm_(min) {
   return pad2_(Math.floor(min / 60)) + ':' + pad2_(min % 60);
 }
@@ -274,10 +311,12 @@ function parseSlot_(v) {
   var m = str_(v).match(/(\d+)\s*$/);
   if (!m) return null;
   var n = Number(m[1]);
-  return n >= 1 && n <= SLOTS_PER_BLOCK ? n : null;
+  return n >= 1 && n <= MAX_SLOTS ? n : null;
 }
 
-function loadRoster_(ss) {
+/** Roster rows a student can book from; cls is the class block 'A' or 'B' (see blockOf_). */
+function loadRoster_(ss, cfg) {
+  cfg = cfg || loadConfig_(ss);
   var c = TABS.Roster;
   return rows_(ss, 'Roster').map(function (r) {
     return {
@@ -285,10 +324,10 @@ function loadRoster_(ss) {
       fullName: str_(r[c.indexOf('fullName')]),
       displayName: str_(r[c.indexOf('displayName')]),
       email: str_(r[c.indexOf('email')]),
-      cls: str_(r[c.indexOf('class')]).toUpperCase(),
+      cls: blockOf_(r[c.indexOf('class')], cfg),
       active: truthy_(r[c.indexOf('active')])
     };
-  }).filter(function (s) { return s.rosterId && s.displayName && CLASSES.indexOf(s.cls) >= 0; });
+  }).filter(function (s) { return s.rosterId && s.displayName && CLASS_BLOCKS.indexOf(s.cls) >= 0; });
 }
 
 /** Bookings with normalized fields. Rows whose date/class/slot fail validation are skipped. */
@@ -307,7 +346,7 @@ function loadBookings_(ss) {
       cancelToken: str_(r[c.indexOf('cancelToken')]),
       createdAt: r[c.indexOf('createdAt')]
     };
-    if (!b.id || !b.date || CLASSES.indexOf(b.cls) < 0 || !b.slot) return;   // skip, never throw
+    if (!b.id || !b.date || BLOCKS.indexOf(b.cls) < 0 || !isSlotOf_(b.cls, b.slot)) return;   // skip, never throw
     out.push(b);
   });
   return out;
@@ -321,14 +360,15 @@ function occupyingStatus_(status) {
 }
 
 /** Blocked tab → matcher. Unrecognized class/slot values widen the block (blocked wins). */
-function loadBlocked_(ss) {
+function loadBlocked_(ss, cfg) {
+  cfg = cfg || loadConfig_(ss);
   var tz = tz_(ss), byDate = {}, byClass = {}, bySlot = {};
   rows_(ss, 'Blocked').forEach(function (r) {
     var date = normDate_(r[0], tz);
     if (!date) return;
-    var cls = str_(r[1]).toUpperCase();
+    var cls = blockOf_(r[1], cfg);
     var slotRaw = str_(r[2]);
-    if (CLASSES.indexOf(cls) < 0) { byDate[date] = true; return; }
+    if (!cls) { byDate[date] = true; return; }
     var slot = slotRaw ? parseSlot_(slotRaw) : null;
     if (!slot) { byClass[date + '|' + cls] = true; return; }
     bySlot[date + '|' + cls + '|' + slot] = true;
@@ -340,10 +380,12 @@ function loadBlocked_(ss) {
   };
 }
 
-/** requireClassCode: ticked/TRUE → booking needs the class code; blank/FALSE → it doesn't. */
+/** requireClassCode: ticked/TRUE → booking needs the class code; blank/FALSE → it doesn't.
+ *  blockAName / blockBName: the class names for the 7:30 and 1:00 blocks (blank = "Block A/B"). */
 function loadConfig_(ss) {
   var r = rows_(ss, 'Config')[0] || [];
-  return { classCode: str_(r[0]), agentKey: str_(r[1]), requireClassCode: truthy_(r[2]) };
+  return { classCode: str_(r[0]), agentKey: str_(r[1]), requireClassCode: truthy_(r[2]),
+           blockNames: { A: str_(r[3]), B: str_(r[4]) } };
 }
 
 function slotKey_(date, cls, slot) { return date + '|' + cls + '|' + slot; }
@@ -367,19 +409,21 @@ function occupancy_(bookings) {
 function buildSchedule_(ss) {
   var tz = tz_(ss);
   var np = nowParts_(tz);
-  var roster = loadRoster_(ss).filter(function (s) { return s.active; });
+  var cfg = loadConfig_(ss);
+  var labels = blockLabels_(cfg);
+  var roster = loadRoster_(ss, cfg).filter(function (s) { return s.active; });
   var occ = occupancy_(loadBookings_(ss));
-  var blocked = loadBlocked_(ss);
+  var blocked = loadBlocked_(ss, cfg);
 
   var days = windowDates_(np.date).map(function (date) {
     return {
       date: date,
       blocked: blocked.date(date),
-      classes: CLASSES.map(function (cls) {
+      classes: BLOCKS.map(function (cls) {
         var slots = [];
-        for (var i = 1; i <= SLOTS_PER_BLOCK; i++) {
+        for (var i = 1; i <= slotsIn_(cls); i++) {
           var startMin = slotStartMin_(cls, i);
-          var slot = { i: i, start: hhmm_(startMin) };
+          var slot = { i: i, start: hhmm_(startMin), code: slotCode_(cfg, cls, i) };
           if (blocked.slot(date, cls, i)) {
             slot.status = 'blocked';                       // blocked wins (SPEC §6)
           } else if (hasEnded_(date, startMin + SLOT_MINUTES, np)) {
@@ -391,7 +435,9 @@ function buildSchedule_(ss) {
           }
           slots.push(slot);
         }
-        return { 'class': cls, blocked: blocked.cls(date, cls), slots: slots };
+        // open: any student may book it (lunch), not only the roster class `cls`
+        return { 'class': cls, label: labels[cls], open: OPEN_BLOCKS.indexOf(cls) >= 0,
+                 blocked: blocked.cls(date, cls), slots: slots };
       })
     };
   });
@@ -400,7 +446,7 @@ function buildSchedule_(ss) {
     ok: true,
     serverTime: np.iso,
     serverEpochMs: np.epochMs,
-    classCodeRequired: loadConfig_(ss).requireClassCode,
+    classCodeRequired: cfg.requireClassCode,
     roster: roster.map(function (s) { return { rosterId: s.rosterId, displayName: s.displayName, 'class': s.cls }; }),
     days: days
   };
@@ -416,9 +462,9 @@ function handleBook_(ss, body) {
   var cls = str_(body['class']).toUpperCase();
   var slot = Number(body.slot);
   var code = str_(body.classCode);
-  if (!rosterId || !isValidDateStr_(date) || CLASSES.indexOf(cls) < 0 ||
-      !(slot >= 1 && slot <= SLOTS_PER_BLOCK && Math.floor(slot) === slot)) {
-    return { ok: false, error: 'bad_request', message: 'need rosterId, date YYYY-MM-DD, class A/B, slot 1-6' };
+  if (!rosterId || !isValidDateStr_(date) || BLOCKS.indexOf(cls) < 0 || !isSlotOf_(cls, slot)) {
+    return { ok: false, error: 'bad_request',
+             message: 'need rosterId, date YYYY-MM-DD, class A/L/B, slot 1-6 (1-2 for L)' };
   }
 
   var mail = null;
@@ -427,14 +473,14 @@ function handleBook_(ss, body) {
     var np = nowParts_(tz);
     var cfg = loadConfig_(ss);
     var student = null;
-    loadRoster_(ss).forEach(function (s) { if (s.rosterId === rosterId && s.active) student = s; });
+    loadRoster_(ss, cfg).forEach(function (s) { if (s.rosterId === rosterId && s.active) student = s; });
 
     if (!student) return { ok: false, error: 'not_on_roster' };
     if (cfg.requireClassCode &&
         (!cfg.classCode || code.toLowerCase() !== cfg.classCode.toLowerCase())) return { ok: false, error: 'bad_code' };
-    if (student.cls !== cls) return { ok: false, error: 'wrong_block' };
+    if (OPEN_BLOCKS.indexOf(cls) < 0 && student.cls !== cls) return { ok: false, error: 'wrong_block' };
     if (windowDates_(np.date).indexOf(date) < 0) return { ok: false, error: 'not_in_window' };
-    if (loadBlocked_(ss).slot(date, cls, slot)) return { ok: false, error: 'blocked' };
+    if (loadBlocked_(ss, cfg).slot(date, cls, slot)) return { ok: false, error: 'blocked' };
     var startMin = slotStartMin_(cls, slot);
     if (!startsInFuture_(date, startMin, np)) return { ok: false, error: 'past' };
 
@@ -454,7 +500,7 @@ function handleBook_(ss, body) {
       [[id, date, cls, slot, rosterId, student.displayName, STATUS.BOOKED, token, new Date()]],
       DATE_COL.Bookings);
 
-    if (student.email) mail = bookingEmail_(student, date, cls, slot, token);
+    if (student.email) mail = bookingEmail_(student, date, cls, slot, token, blockLabels_(cfg)[cls]);
     return { ok: true, bookingId: id, date: date, 'class': cls, slot: slot, displayName: student.displayName };
   });
 
@@ -462,7 +508,8 @@ function handleBook_(ss, body) {
   return result;
 }
 
-function bookingEmail_(student, date, cls, slot, token) {
+/** label: the block as people know it (blockLabels_), e.g. "CD" or "Lunch". */
+function bookingEmail_(student, date, cls, slot, token, label) {
   var start = slotStartMin_(cls, slot);
   var when = prettyDate_(date) + ', ' + prettyTime_(start) + '–' + prettyTime_(start + SLOT_MINUTES);
   return {
@@ -470,21 +517,21 @@ function bookingEmail_(student, date, cls, slot, token) {
     subject: MAIL_NAME + ' booked: ' + when,
     body: 'Hi ' + student.displayName + ',\n\n' +
       'You are booked on the ' + MAIL_NAME + ':\n\n' +
-      '  ' + when + ' (Block ' + cls + ', slot ' + cls + slot + ')\n\n' +
+      '  ' + when + ' (' + label + ', slot ' + slot + ')\n\n' +
       'Arrive within 5 minutes or your slot releases (and still counts as your booking for the day).\n\n' +
       'Need to cancel? Open this link before the slot starts:\n' + cancelLink_(token) + '\n\n' +
       '— ' + MAIL_NAME
   };
 }
 
-function cancelEmail_(email, displayName, date, cls, slot, byTeacher) {
+function cancelEmail_(email, displayName, date, cls, slot, byTeacher, label) {
   var start = slotStartMin_(cls, slot);
   var when = prettyDate_(date) + ', ' + prettyTime_(start);
   return {
     to: email,
     subject: MAIL_NAME + ' booking cancelled: ' + when,
     body: 'Hi ' + displayName + ',\n\n' +
-      'Your ' + MAIL_NAME + ' booking for ' + when + ' (Block ' + cls + ') has been cancelled' +
+      'Your ' + MAIL_NAME + ' booking for ' + when + ' (' + label + ') has been cancelled' +
       (byTeacher ? ' by your teacher' : '') + '. The slot is open again, and you can book another slot that day.\n\n' +
       'Booking page: ' + SPA_URL + '\n\n— ' + MAIL_NAME
   };
@@ -498,8 +545,9 @@ function cancelLink_(token) {
 // POST cancel (student, via emailed token)
 // ============================================================================
 
-function bookingSummary_(b) {
+function bookingSummary_(b, cfg) {
   return { date: b.date, 'class': b.cls, slot: b.slot, start: hhmm_(slotStartMin_(b.cls, b.slot)),
+           code: slotCode_(cfg, b.cls, b.slot), label: blockLabels_(cfg)[b.cls],
            displayName: b.displayName, status: occupyingStatus_(b.status) || STATUS.CANCELLED };
 }
 
@@ -521,13 +569,14 @@ function findByToken_(ss, token) {
 function handleCancel_(ss, body) {
   var token = str_(body.token);
   if (!token) return { ok: false, error: 'invalid_token' };
+  var cfg = loadConfig_(ss);
 
   if (body.confirm !== true) {                                     // preview: read-only, no lock
     var b0 = findByToken_(ss, token);
     if (!b0) return { ok: false, error: 'invalid_token' };
     var why = cancelBlocker_(b0, nowParts_(tz_(ss)));
-    return why ? { ok: false, error: why, booking: bookingSummary_(b0) }
-               : { ok: true, preview: true, booking: bookingSummary_(b0) };
+    return why ? { ok: false, error: why, booking: bookingSummary_(b0, cfg) }
+               : { ok: true, preview: true, booking: bookingSummary_(b0, cfg) };
   }
 
   var mail = null;
@@ -535,12 +584,14 @@ function handleCancel_(ss, body) {
     var b = findByToken_(ss, token);                               // re-located inside the lock
     if (!b) return { ok: false, error: 'invalid_token' };
     var why = cancelBlocker_(b, nowParts_(tz_(ss)));
-    if (why) return { ok: false, error: why, booking: bookingSummary_(b) };
+    if (why) return { ok: false, error: why, booking: bookingSummary_(b, cfg) };
     setStatusById_(ss, b.id, STATUS.CANCELLED);
     var student = rosterById_(ss, b.rosterId);
-    if (student && student.email) mail = cancelEmail_(student.email, b.displayName, b.date, b.cls, b.slot, false);
+    if (student && student.email) {
+      mail = cancelEmail_(student.email, b.displayName, b.date, b.cls, b.slot, false, blockLabels_(cfg)[b.cls]);
+    }
     b.status = STATUS.CANCELLED;
-    return { ok: true, cancelled: true, booking: bookingSummary_(b) };
+    return { ok: true, cancelled: true, booking: bookingSummary_(b, cfg) };
   });
   if (result.ok) result.emailSent = mail ? sendMails_([mail]) : false;
   return result;
@@ -583,7 +634,7 @@ function validateEvent_(ev) {
   if (!EVENT_ID_RE.test(str_(ev.eventId))) return 'bad eventId';
   if (EVENT_TYPES.indexOf(ev.type) < 0) return 'bad type';
   if (ev.date != null && ev.date !== '' && !isValidDateStr_(ev.date)) return 'bad date';
-  if (ev['class'] != null && ev['class'] !== '' && CLASSES.indexOf(ev['class']) < 0) return 'bad class';
+  if (ev['class'] != null && ev['class'] !== '' && BLOCKS.indexOf(ev['class']) < 0) return 'bad class';
   if (ev.slot != null && ev.slot !== '' && !parseSlot_(ev.slot)) return 'bad slot';
   if (ev.rosterId != null && ev.rosterId !== '' && !ROSTER_ID_RE.test(str_(ev.rosterId))) return 'bad rosterId';
   if (ev.minutes != null && ev.minutes !== '' && !(typeof ev.minutes === 'number' && ev.minutes >= 0 && ev.minutes < 1000)) return 'bad minutes';
@@ -688,7 +739,9 @@ function setup() {
       : 'WARNING: the Apps Script project timezone is ' + scriptTz + ' — set "timeZone": "' + SCHOOL_TZ +
         '" in appsscript.json (Project Settings → Show "appsscript.json"), then run setup() again.') +
     '\n\nConfig has a classCode and agentKey (edit them any time). Tick requireClassCode to make students ' +
-    'type the class code when booking (unticked = not asked). Next: fill the Roster tab.';
+    'type the class code when booking (unticked = not asked). Optional: type your class names under ' +
+    'blockAName (the 7:30 class) and blockBName (the 1:00 class); the Roster class column can then use them. ' +
+    'Next: fill the Roster tab, then run Timeshare → Check roster.';
   console.log(msg);
   try { SpreadsheetApp.getUi().alert(msg); } catch (noUi) { /* run from editor without a Sheet UI */ }
 }
@@ -712,6 +765,138 @@ function addTestStudents() {
 }
 
 // ============================================================================
+// Roster check — why a student is missing from the booking page's name list
+// ============================================================================
+
+/** Reports which Roster rows the booking page skips, and why (Timeshare menu or the editor).
+ *  Read-only. Names rows by number; the report stays in your Sheet and Apps Script log. */
+function checkRoster() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sh = sheet_(ss, 'Roster');
+  var cols = TABS.Roster;
+  var col = function (name) { return String.fromCharCode(65 + cols.indexOf(name)) + ' (' + name + ')'; };
+  var lines = ['Roster check for the Sheet "' + ss.getName() + '".', ''];
+
+  var header = sh.getRange(1, 1, 1, cols.length).getValues()[0];
+  var badHeaders = [];
+  cols.forEach(function (name, i) {
+    if (str_(header[i]).toLowerCase() !== name.toLowerCase()) {
+      badHeaders.push('Column ' + String.fromCharCode(65 + i) + ' is headed ' + rosterValue_(header[i]) +
+        ', expected "' + name + '".');
+    }
+  });
+  if (badHeaders.length) {
+    lines = lines.concat(badHeaders, ['The booking page reads columns by position, not by header, so they must be ' +
+      'in this order: ' + cols.join(', ') + '.', '']);
+  }
+
+  var cfg = loadConfig_(ss), labels = blockLabels_(cfg);
+  var named = !!(cfg.blockNames.A || cfg.blockNames.B);
+  var noId = [], noName = [], badClass = [], inactive = [], classVals = [], activeVals = [];
+  var noEmail = [], ids = {}, names = {}, total = 0, shown = { A: 0, B: 0 };
+  rows_(ss, 'Roster').forEach(function (r, i) {
+    var row = i + 2;
+    if (r.every(function (v) { return str_(v) === ''; })) return;   // blank row: ignored
+    total++;
+    var id = str_(r[cols.indexOf('rosterId')]);
+    var name = str_(r[cols.indexOf('displayName')]);
+    var clsRaw = r[cols.indexOf('class')];
+    var cls = blockOf_(clsRaw, cfg);
+    var activeRaw = r[cols.indexOf('active')];
+    var ok = true;
+    if (id) (ids[id] = ids[id] || []).push(row);
+    if (!id) { noId.push(row); ok = false; }
+    if (!name) { noName.push(row); ok = false; }
+    if (CLASS_BLOCKS.indexOf(cls) < 0) { badClass.push(row); addDistinct_(classVals, rosterValue_(clsRaw)); ok = false; }
+    if (!truthy_(activeRaw)) { inactive.push(row); addDistinct_(activeVals, rosterValue_(activeRaw)); ok = false; }
+    if (!ok) return;
+    shown[cls]++;
+    if (!str_(r[cols.indexOf('email')])) noEmail.push(row);
+    var key = name.toLowerCase();                       // Lunch lists every student, so names clash roster-wide
+    (names[key] = names[key] || []).push(row);
+  });
+
+  if (!total) {
+    lines.push('The Roster tab has no students: rows 2 and below are empty. If you filled in the roster ' +
+      'somewhere else (another tab or a copy of this Sheet), the booking page can\'t see it. It only reads ' +
+      'this Sheet\'s Roster tab.');
+  } else {
+    var nShown = shown.A + shown.B, nSkipped = total - nShown;
+    var split = '(' + shown.A + ' in ' + labels.A + ', ' + shown.B + ' in ' + labels.B + ')';
+    lines.push(nSkipped
+      ? total + ' students on the Roster tab: ' + nShown + ' show on the booking page ' + split + ', ' +
+        nSkipped + (nSkipped === 1 ? ' is' : ' are') + ' skipped.'
+      : 'All ' + total + ' students show on the booking page ' + split + '.');
+    var reason = function (rows, what, found, fix) {
+      if (!rows.length) return;
+      lines.push('', '• ' + what + ': ' + rowsText_(rows) + '.' + (found ? ' Found: ' + found.join(', ') + '.' : ''),
+        '  Fix: ' + fix);
+    };
+    reason(inactive, 'Column ' + col('active') + ' isn\'t TRUE, so the student is hidden', activeVals,
+      'type TRUE (or tick a checkbox) for every student who should appear. FALSE hides a student on purpose.');
+    reason(badClass, 'Column ' + col('class') + ' isn\'t a class this system knows', classVals, named
+      ? 'use ' + labels.A + ' (the 7:30 block) or ' + labels.B + ' (the 1:00 block), as named in the Config tab. ' +
+        'The letters A and B work too.'
+      : 'use A (the 7:30 block) or B (the 1:00 block). To use your own class names instead (like "CD"), type ' +
+        'them in the Config tab: blockAName for the 7:30 class, blockBName for the 1:00 class. ' +
+        'Run setup() first if Config doesn\'t have those columns yet.');
+    reason(noId, 'Column ' + col('rosterId') + ' is empty', null, 'give each student a made-up id like r01.');
+    reason(noName, 'Column ' + col('displayName') + ' is empty', null,
+      'add the short name shown on the grid, like "Maya R.".');
+  }
+
+  var warnings = [];
+  if (noEmail.length) {
+    warnings.push('Column ' + col('email') + ' is empty on ' + rowsText_(noEmail) + '. They can book, but get no ' +
+      'confirmation email or cancel link.');
+  }
+  Object.keys(ids).forEach(function (id) {
+    if (ids[id].length > 1) warnings.push('rosterId "' + id + '" is on ' + rowsText_(ids[id]) + '. Each id must be unique.');
+  });
+  Object.keys(names).forEach(function (key) {
+    if (names[key].length > 1) {
+      warnings.push(rowsText_(names[key]) + ' have the same displayName, so students can\'t tell them apart in ' +
+        'the name list (Lunch lists everyone). Make them different ("Maya Ro." / "Maya Re.").');
+    }
+  });
+  if (warnings.length) {
+    lines.push('', 'Also worth fixing:');
+    warnings.forEach(function (w) { lines.push('• ' + w); });
+  }
+
+  lines.push('', 'Changes to the Sheet take effect right away: reload the booking page to see them.');
+  var msg = lines.join('\n');
+  console.log(msg);
+  try { SpreadsheetApp.getUi().alert('Roster check', msg, SpreadsheetApp.getUi().ButtonSet.OK); } catch (noUi) { /* editor */ }
+  return msg;
+}
+
+/** A cell value as the report shows it. */
+function rosterValue_(v) {
+  if (v === true) return 'TRUE';
+  if (v === false) return 'FALSE (unticked)';
+  var s = str_(v);
+  if (!s) return '(blank)';
+  return '"' + (s.length > 20 ? s.slice(0, 20) + '…' : s) + '"';
+}
+
+function addDistinct_(list, v) {
+  if (list.indexOf(v) < 0 && list.length < 5) list.push(v);
+}
+
+/** [2,3,4,7] → "rows 2–4, 7". */
+function rowsText_(nums) {
+  var parts = [];
+  for (var i = 0; i < nums.length; i++) {
+    var j = i;
+    while (j + 1 < nums.length && nums[j + 1] === nums[j] + 1) j++;
+    parts.push(j > i ? nums[i] + '–' + nums[j] : String(nums[i]));
+    i = j;
+  }
+  return (nums.length === 1 ? 'row ' : 'rows ') + parts.join(', ');
+}
+
+// ============================================================================
 // Teacher menu (onOpen) — SPEC §5, §7
 // ============================================================================
 
@@ -721,13 +906,17 @@ function onOpen() {
     .addItem('Block a date…', 'menuBlockDate')
     .addItem('Cancel all bookings for a date…', 'menuCancelAllForDate')
     .addSeparator()
+    .addItem('Check roster', 'checkRoster')
     .addItem('Run setup()', 'setup')
     .addToUi();
 }
 
-function describe_(b) {
-  return b.displayName + ' — ' + prettyDate_(b.date) + ' ' + prettyTime_(slotStartMin_(b.cls, b.slot)) +
-    ' (' + b.cls + b.slot + ', ' + b.status + ')';
+/** One booking as a line for teacher dialogs; usage: bookings.map(describer_(cfg)). */
+function describer_(cfg) {
+  return function (b) {
+    return b.displayName + ' — ' + prettyDate_(b.date) + ' ' + prettyTime_(slotStartMin_(b.cls, b.slot)) +
+      ' (' + slotCode_(cfg, b.cls, b.slot) + ', ' + b.status + ')';
+  };
 }
 
 /** Cancels bookings by id under the lock (re-located by id at write time), then emails each
@@ -737,15 +926,16 @@ function cancelByIds_(ss, ids) {
   var res = withLock_(function () {
     var want = {};
     ids.forEach(function (id) { want[id] = true; });
+    var cfg = loadConfig_(ss), labels = blockLabels_(cfg);
     var roster = {};
-    loadRoster_(ss).forEach(function (s) { roster[s.rosterId] = s; });
+    loadRoster_(ss, cfg).forEach(function (s) { roster[s.rosterId] = s; });
     var n = 0;
     loadBookings_(ss).forEach(function (b) {
       if (!want[b.id]) return;
       if (setStatusById_(ss, b.id, STATUS.CANCELLED)) {
         n++;
         var s = roster[b.rosterId];
-        if (s && s.email) mails.push(cancelEmail_(s.email, b.displayName, b.date, b.cls, b.slot, true));
+        if (s && s.email) mails.push(cancelEmail_(s.email, b.displayName, b.date, b.cls, b.slot, true, labels[b.cls]));
       }
     });
     return { ok: true, cancelled: n };
@@ -775,7 +965,8 @@ function menuCancelSelected() {
       'To forgive a no-show, set the status to done or cancelled by hand (never back to booked).');
     return;
   }
-  if (ui.alert('Cancel this booking and email the student?\n\n' + describe_(b), ui.ButtonSet.YES_NO) !== ui.Button.YES) return;
+  var line = describer_(loadConfig_(ss))(b);
+  if (ui.alert('Cancel this booking and email the student?\n\n' + line, ui.ButtonSet.YES_NO) !== ui.Button.YES) return;
   reportCancel_(ui, cancelByIds_(ss, [b.id]));                    // id re-located inside the lock
 }
 
@@ -790,15 +981,18 @@ function menuBlockDate() {
   var date = promptText_(ui, 'Block a date', 'Date to block (YYYY-MM-DD):');
   if (date === null) return;
   if (!isValidDateStr_(date)) { ui.alert('"' + date + '" is not a valid YYYY-MM-DD date.'); return; }
-  var cls = promptText_(ui, 'Block a date', 'Block (A or B) — leave blank to block the whole day:');
-  if (cls === null) return;
-  cls = cls.toUpperCase();
-  if (cls && CLASSES.indexOf(cls) < 0) { ui.alert('Block must be A, B, or blank.'); return; }
+  var cfg = loadConfig_(ss), labels = blockLabels_(cfg);
+  var choices = labels.A + ', ' + labels.L + ' or ' + labels.B;
+  var typed = promptText_(ui, 'Block a date', 'Block (' + choices + ') — leave blank to block the whole day:');
+  if (typed === null) return;
+  var cls = blockOf_(typed, cfg);
+  if (typed && !cls) { ui.alert('Block must be ' + choices + ', or blank.'); return; }
   var slot = '';
   if (cls) {
-    var s = promptText_(ui, 'Block a date', 'Slot number 1–6 — leave blank to block all of Block ' + cls + ':');
+    var max = slotsIn_(cls);
+    var s = promptText_(ui, 'Block a date', 'Slot number 1–' + max + ' — leave blank to block all of ' + labels[cls] + ':');
     if (s === null) return;
-    if (s) { slot = parseSlot_(s); if (!slot) { ui.alert('Slot must be 1–6 or blank.'); return; } }
+    if (s) { slot = parseSlot_(s); if (!slot || slot > max) { ui.alert('Slot must be 1–' + max + ' or blank.'); return; } }
   }
   var reason = promptText_(ui, 'Block a date', 'Reason (optional):');
   if (reason === null) return;
@@ -813,9 +1007,9 @@ function menuBlockDate() {
     return b.date === date && (!cls || b.cls === cls) && (!slot || b.slot === slot) &&
       occupyingStatus_(b.status) === STATUS.BOOKED;
   });
-  var what = date + (cls ? ' Block ' + cls + (slot ? ' slot ' + slot : '') : ' (whole day)');
+  var what = date + (cls ? ' ' + labels[cls] + (slot ? ' slot ' + slot : '') : ' (whole day)');
   if (!hits.length) { ui.alert('Blocked ' + what + '. No bookings were affected.'); return; }
-  var list = hits.map(describe_).join('\n');
+  var list = hits.map(describer_(cfg)).join('\n');
   var ans = ui.alert('Blocked ' + what + '.\n\nThese bookings are still active:\n' + list +
     '\n\nCancel all of them and email the students?', ui.ButtonSet.YES_NO);
   if (ans !== ui.Button.YES) {
@@ -852,7 +1046,7 @@ function menuCancelAllForDate() {
   });
   if (!hits.length) { ui.alert('No active bookings match.'); return; }
   var ans = ui.alert('Cancel these ' + hits.length + ' booking(s) and email each student?\n\n' +
-    hits.map(describe_).join('\n'), ui.ButtonSet.YES_NO);
+    hits.map(describer_(loadConfig_(ss))).join('\n'), ui.ButtonSet.YES_NO);
   if (ans !== ui.Button.YES) return;
   reportCancel_(ui, cancelByIds_(ss, hits.map(function (b) { return b.id; })));
 }

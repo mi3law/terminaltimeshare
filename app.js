@@ -10,7 +10,9 @@ const EXEC_URL = 'https://script.google.com/macros/s/AKfycbwjj68ByES0iy59qaxwh-G
 const POLL_MS = 60000;
 const POLL_JITTER_MS = 10000;
 const SLOT_MINUTES = 15;
-const BLOCK_LABEL = { A: 'Block A · 7:30–9:00 AM', B: 'Block B · 1:00–2:30 PM' };
+// The backend sends each block's label (the teacher's class names, "Lunch") and slot codes;
+// these fallbacks cover an older backend that doesn't.
+const BLOCK_FALLBACK = { A: 'Block A', L: 'Lunch', B: 'Block B' };
 const LS_NAME = 'tts.myName';
 const LS_CODE = 'tts.classCode';
 
@@ -113,6 +115,23 @@ function prettyTime(hhmm) {
   return `${((h + 11) % 12) + 1}:${String(m).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`;
 }
 
+/** Minutes after midnight → "7:30–9:00 AM" / "10:40–11:10 AM" / "11:45 AM–12:15 PM". */
+function prettyRange(a, b) {
+  const hm = (x) => `${((Math.floor(x / 60) + 11) % 12) + 1}:${String(x % 60).padStart(2, '0')}`;
+  const half = (x) => (x < 720 ? 'AM' : 'PM');
+  return half(a) === half(b) ? `${hm(a)}–${hm(b)} ${half(b)}` : `${hm(a)} ${half(a)}–${hm(b)} ${half(b)}`;
+}
+
+const blockLabel = (blk) => blk.label || BLOCK_FALLBACK[blk.class] || `Block ${blk.class}`;
+const slotCode = (blk, slot) => slot.code || `${blk.class}${slot.i}`;
+
+function blockHeading(blk) {
+  if (!blk.slots.length) return blockLabel(blk);
+  const first = toMin(blk.slots[0].start);
+  const end = toMin(blk.slots[blk.slots.length - 1].start) + SLOT_MINUTES;
+  return `${blockLabel(blk)} · ${prettyRange(first, end)}`;
+}
+
 function prettyDate(dateStr) {
   const [y, mo, d] = dateStr.split('-').map(Number);
   return new Date(Date.UTC(y, mo - 1, d))
@@ -151,11 +170,11 @@ function render() {
       grid.appendChild(card);
       continue;
     }
-    for (const cls of day.classes) {
+    for (const blk of day.classes) {
       const block = el('section', 'block');
-      block.appendChild(el('h3', '', BLOCK_LABEL[cls.class] || `Block ${cls.class}`));
+      block.appendChild(el('h3', '', blockHeading(blk)));
       const list = el('ol');
-      for (const slot of cls.slots) list.appendChild(el('li')).appendChild(slotCell(day.date, cls.class, slot, now, myName));
+      for (const slot of blk.slots) list.appendChild(el('li')).appendChild(slotCell(day.date, blk, slot, now, myName));
       block.appendChild(list);
       card.appendChild(block);
     }
@@ -163,7 +182,7 @@ function render() {
   }
 }
 
-function slotCell(date, cls, slot, now, myName) {
+function slotCell(date, blk, slot, now, myName) {
   const when = phase(date, toMin(slot.start), now);
   let label, kind;
   if (slot.status === 'blocked') { label = 'Blocked'; kind = 'blocked'; }
@@ -176,14 +195,15 @@ function slotCell(date, cls, slot, now, myName) {
   } else if (when === 'current') { label = 'Now — walk-up at the machine'; kind = 'now'; }
   else { label = 'Open'; kind = 'open'; }
 
+  const code = slotCode(blk, slot);
   const cell = el(kind === 'open' ? 'button' : 'div', `slot ${kind}`);
-  cell.title = `${cls}${slot.i} · ${prettyTime(slot.start)} — ${label}`;
-  cell.appendChild(el('span', 't', `${cls}${slot.i} · ${prettyTime(slot.start)}`));
+  cell.title = `${code} · ${prettyTime(slot.start)} — ${label}`;
+  cell.appendChild(el('span', 't', `${code} · ${prettyTime(slot.start)}`));
   cell.appendChild(el('span', 's', label));
   if (kind === 'open') {
     cell.type = 'button';
-    cell.setAttribute('aria-label', `Book ${cls}${slot.i}, ${prettyDate(date)} ${prettyTime(slot.start)}`);
-    cell.addEventListener('click', () => openBooking(date, cls, slot));
+    cell.setAttribute('aria-label', `Book ${code}, ${prettyDate(date)} ${prettyTime(slot.start)}`);
+    cell.addEventListener('click', () => openBooking(date, blk, slot));
   }
   return cell;
 }
@@ -217,12 +237,13 @@ function safeSet(k, v) { try { localStorage.setItem(k, v); } catch (e) { /* priv
 
 // ---------------------------------------------------------------- booking ---
 
-function openBooking(date, cls, slot) {
-  pending = { date, cls, slot: slot.i, start: slot.start, needCode: codeRequired() };
-  $('book-title').textContent = `Book ${cls}${slot.i} · ${prettyDate(date)} · ${prettyTime(slot.start)}`;
+function openBooking(date, blk, slot) {
+  const code = slotCode(blk, slot);
+  pending = { date, cls: blk.class, slot: slot.i, start: slot.start, code, needCode: codeRequired() };
+  $('book-title').textContent = `Book ${code} · ${prettyDate(date)} · ${prettyTime(slot.start)}`;
   const sel = $('book-name');
   sel.textContent = '';
-  const people = (schedule.roster || []).filter((s) => s.class === cls)
+  const people = (schedule.roster || []).filter((s) => blk.open || s.class === blk.class)   // Lunch: everyone
     .sort((a, b) => a.displayName.localeCompare(b.displayName));
   sel.appendChild(new Option('Choose your name…', ''));
   const myName = safeGet(LS_NAME);
@@ -268,7 +289,7 @@ async function submitBooking(ev) {
   if (pending.needCode) safeSet(LS_CODE, classCode);
   safeSet(LS_NAME, res.displayName || $('book-name').selectedOptions[0].textContent);
   $('book-dialog').close();
-  const what = `${pending.cls}${pending.slot} · ${prettyDate(pending.date)} · ${prettyTime(pending.start)}`;
+  const what = `${pending.code} · ${prettyDate(pending.date)} · ${prettyTime(pending.start)}`;
   if (res.emailSent === false) {
     showBanner(`Booked ${what}, but the email didn't send — ask your teacher if you need to cancel.`, 'warn');
   } else {
@@ -288,7 +309,7 @@ async function startCancelFlow(token) {
   if (!res.ok) return showCancelError(res);
   const b = res.booking;
   panel.textContent = '';
-  panel.appendChild(el('p', '', `Cancel ${b.displayName}'s booking: ${b.class}${b.slot} · ${prettyDate(b.date)} · ${prettyTime(b.start)}?`));
+  panel.appendChild(el('p', '', `Cancel ${b.displayName}'s booking: ${b.code || `${b.class}${b.slot}`} · ${prettyDate(b.date)} · ${prettyTime(b.start)}?`));
   const actions = el('div', 'actions');
   const keep = el('button', 'secondary', 'Keep it');
   const go = el('button', '', 'Confirm cancel');

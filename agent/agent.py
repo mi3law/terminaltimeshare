@@ -672,8 +672,8 @@ class KioskApp:
         self.ov_badges.config(text="   ".join(self._badges(v)))
         self.ov_clock.config(text=fmt_time(v.now, seconds=True))
         blk = v.block
-        slot_txt = (f"{blk.cls}{v.slot} · {fmt_time(blk.slot_start(v.slot))}–{fmt_time(blk.slot_end(v.slot))}"
-                    if v.slot else f"Block {blk.cls} · {fmt_time(blk.start)}–{fmt_time(blk.end)}")
+        slot_txt = (f"{core.slot_code(self.cache, blk.cls, v.slot)} · {fmt_time(blk.slot_start(v.slot))}–{fmt_time(blk.slot_end(v.slot))}"
+                    if v.slot else f"{core.block_label(self.cache, blk.cls)} · {fmt_time(blk.start)}–{fmt_time(blk.end)}")
         primary = None
         if v.mode == core.RESERVED:
             self.ov_title.config(text=f"Reserved for {v.reserved_name or 'a booking'}", fg=FG)
@@ -719,7 +719,7 @@ class KioskApp:
         lines = []
         for r in v.rows:
             mark = "▶" if r.i == v.slot else " "
-            lines.append(f"{mark} {blk.cls}{r.i}  {fmt_time(r.start):>8}  {row_label(r)}")
+            lines.append(f"{mark} {core.slot_code(self.cache, blk.cls, r.i)}  {fmt_time(r.start):>8}  {row_label(r)}")
         self.ov_sched.config(text="\n".join(lines) if lines else "")
         nu = v.next_up
         self.ov_next.config(text=(f"Next: {fmt_time(nu.start)} — {nu.name or 'Booked'}" if nu and nu.status == "booked"
@@ -772,7 +772,8 @@ class KioskApp:
             nxt = core.next_armed_start(now, self.test_windows)
             mode = f"DORMANT — {v.note}" + (f"; next arm {nxt:%a} {fmt_time(nxt)}" if nxt else "")
         else:
-            where = f"Block {v.block.cls}" + (f", slot {v.block.cls}{v.slot}" if v.slot else "") if v.block else ""
+            where = (core.block_label(self.cache, v.block.cls) +
+                     (f", slot {core.slot_code(self.cache, v.block.cls, v.slot)}" if v.slot else "")) if v.block else ""
             mode = f"{v.mode} ({where})"
         fetched = (self.cache or {}).get("fetchedAt") or "never"
         lines = [

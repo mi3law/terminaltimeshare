@@ -1,10 +1,10 @@
 # AI Terminal Timeshare — v1 Specification
 
-Booking and automatic timekeeping for one shared AI-coding workstation ("the AI terminal") in a high-school classroom. Two class blocks daily, 15-minute slots, teacher-supervised.
+Booking and automatic timekeeping for one shared AI-coding workstation ("the AI terminal") in a high-school classroom. Two class blocks plus a lunch block daily, 15-minute slots, teacher-supervised.
 
 **Design goals:** minimal, zero-cost, casual-proof (not tamper-proof), teacher-operable from a Google Sheet.
 
-*Rev 1.5 — class code is a switch, off by default (see §12). Rev 1.3 — school week is Sunday–Thursday (see §12). Rev 1.2 — incorporates a seven-lens adversarial design review (40 findings folded in) plus a requirements-coverage audit (all original requirements and agreed decisions verified covered) and a final author consistency pass.*
+*Rev 1.6 — Lunch block, class names, roster check (see §12). Rev 1.5 — class code is a switch, off by default (see §12). Rev 1.3 — school week is Sunday–Thursday (see §12). Rev 1.2 — incorporates a seven-lens adversarial design review (40 findings folded in) plus a requirements-coverage audit (all original requirements and agreed decisions verified covered) and a final author consistency pass.*
 
 ## 1. Architecture — three components
 
@@ -19,7 +19,9 @@ The Sheet **is** the admin console: roster, force-cancels, blocked days, config,
 ## 2. Fixed parameters
 
 - **Block A (morning):** 7:30–9:00. Slots A1–A6 start 7:30, 7:45, 8:00, 8:15, 8:30, 8:45.
+- **Lunch (L):** 10:40–11:10. Two slots, start 10:40 and 10:55. **Open to every active student**, whatever their class.
 - **Block B (afternoon):** 1:00–2:30 PM. Slots B1–B6 start 1:00, 1:15, 1:30, 1:45, 2:00, 2:15.
+- Block ids stay `A` / `L` / `B` everywhere in data (Bookings, Blocked, Log, events). What people *see* is the label: the class names in Config `blockAName` / `blockBName` (e.g. CD / EF; blank = "Block A" / "Block B") and "Lunch". Slot codes follow the label: CD3, EF6, Lunch 1 (A3 when no name is set).
 - 15-minute slots, **solo** (one student per slot).
 - **Booking window:** always the next 5 school days (**Sunday–Thursday**) including today (if today is a school day). Blocked dates render as Blocked columns and **never extend the window**. A slot is bookable online only if its start time is in the future.
 - **Max 1 booking per student per calendar date.** Statuses `booked`, `done`, and `no-show` all consume the day; only `cancelled` frees it.
@@ -40,7 +42,7 @@ The Sheet **is** the admin console: roster, force-cancels, blocked days, config,
 
 - Public URL, mobile-friendly, no sign-in to view. `const EXEC_URL` at the top of `app.js` (public by design).
 - **House rules blurb** rendered above the grid, one line per rule: 1 booking/day · your own block only · arrive within 5 min or your slot releases · walk-ups free whenever the machine shows LOCKED · cancel from your confirmation email.
-- **Grid:** next 5 school days × both blocks × 6 slots. Cell states: `Open` / `Booked — Maya R.` / `Mine` (via localStorage name, cosmetic only) / `Blocked` / `Past` (ended slots show no name — see §5 privacy rule). A started *current* slot whose booking reached a terminal state (no-show release, teacher force-end) renders as `Released` — claimable as a walk-up at the machine, never bookable online.
+- **Grid:** next 5 school days × three blocks (A, Lunch, B; 6 + 2 + 6 slots), headed by each block's label and times. Booking a Lunch slot lists every student's name; a class block lists only its class. Cell states: `Open` / `Booked — Maya R.` / `Mine` (via localStorage name, cosmetic only) / `Blocked` / `Past` (ended slots show no name — see §5 privacy rule). A started *current* slot whose booking reached a terminal state (no-show release, teacher force-end) renders as `Released` — claimable as a walk-up at the machine, never bookable online.
 - **Booking flow:** tap an open slot → pick your name (dropdown filtered to that block's class) → enter class code (only shown while it's required) → Book → confirmation banner + "check your email." If the backend reports the email failed to send, the banner says: *"Booked, but the email didn't send — ask your teacher if you need to cancel."*
 - **Cancel flow:** email link opens SPA with `?cancel=TOKEN` → shows the booking → Confirm → cancelled, slot reopens. Cancel error states rendered inline: link invalid · already cancelled · slot already started ("a no-show releases it automatically — see your teacher if needed").
 - One `schedule` fetch on page load (it includes the roster, §5), then polls every 60 s **with ±10 s jitter** and on tab focus. On any non-JSON or error response, keep rendering the last good grid with its "last updated" stamp and retry next tick — never blank the page.
@@ -53,11 +55,11 @@ The Sheet **is** the admin console: roster, force-cancels, blocked days, config,
 
 | Tab | Columns |
 |---|---|
-| Roster | rosterId, fullName, displayName, email, class (A/B), active |
+| Roster | rosterId, fullName, displayName, email, class (A/B, or the Config name for that block), active |
 | Bookings | id, date, class, slot, rosterId, displayName, status (`booked/done/no-show/cancelled`), cancelToken, createdAt |
 | Blocked | date, class (optional), slot (optional), reason |
 | Log | eventId, timestamp, event, rosterId, date, class, slot, minutes |
-| Config | classCode, agentKey, requireClassCode (checkbox) |
+| Config | classCode, agentKey, requireClassCode (checkbox), blockAName, blockBName |
 
 **Status transitions (hard rule):** `booked → done | no-show | cancelled`, nothing else. `done`, `no-show`, and `cancelled` are terminal — an event targeting a row in a terminal state appends to the Log but never rewrites status. A `booked` row left behind on a past date is inert by design (the 1/day rule is keyed to the date; the Log is the fairness record).
 
@@ -67,15 +69,15 @@ The Sheet **is** the admin console: roster, force-cancels, blocked days, config,
 
 | Call | Action | Returns / does |
 |---|---|---|
-| GET | `schedule` | `{serverTime, classCodeRequired, roster:[{rosterId, displayName, class}], days:[{date, blocked, classes:[{class, blocked, slots:[{i, start, status, displayName?}]}]}]}`. **Privacy rule:** slots whose end time is before serverTime return `status: "past"` with no displayName (the Sheet keeps the real status); the current in-progress slot keeps its real status and name. |
-| POST | `book` | Validates under the script lock: active rosterId · class code (only if `requireClassCode`) · student's class matches block · date in window + school day · **no Blocked row matches at any granularity (date, date+class, or date+class+slot)** · slot start in future · slot free · no booking that date for that student → writes row, then sends email **after releasing the lock** |
+| GET | `schedule` | `{serverTime, classCodeRequired, roster:[{rosterId, displayName, class}], days:[{date, blocked, classes:[{class, label, open, blocked, slots:[{i, start, code, status, displayName?}]}]}]}` — `classes` in time order A, L, B; `open: true` = any student may book (Lunch); roster `class` is always the block id A/B. **Privacy rule:** slots whose end time is before serverTime return `status: "past"` with no displayName (the Sheet keeps the real status); the current in-progress slot keeps its real status and name. |
+| POST | `book` | Validates under the script lock: active rosterId · class code (only if `requireClassCode`) · student's class matches block (skipped for Lunch) · date in window + school day · **no Blocked row matches at any granularity (date, date+class, or date+class+slot)** · slot start in future · slot free · no booking that date for that student → writes row, then sends email **after releasing the lock** |
 | POST | `cancel` | Token lookup; row must be `booked` **and the slot's start time must be in the future** → marks cancelled, sends cancel-confirmation email |
 | POST | `events` | Requires agentKey. Body: `{agentKey, events:[{eventId, type, date, class, slot, rosterId?, minutes?, ts}]}`. Idempotent by eventId: an eventId already in the Log is silently acked. Appends Log rows; resolves (date, class, slot) to the booking row and applies the status transition table (`session_end → done`, `no_show → no-show`); walk-up events write to the Log only |
 
 - **Locking:** `book`/`cancel`/`events` take the script lock with `waitLock(10 s)`; on failure they return a JSON "busy, try again" error (never Google's HTML error page). `SpreadsheetApp.flush()` runs **before** the lock is released; emails are sent after release. Writes re-locate rows **by booking id at write time inside the lock** — never by remembered row index — so teacher edits can't misdirect them.
 - All POSTs sent as `text/plain` with a JSON body (avoids CORS preflight — Apps Script can't answer OPTIONS; responses ride the 302 to script.googleusercontent.com, which is anonymously readable only with an access-anyone deployment). Deployment: execute-as-me, access: **anyone**; **one deployment updated in place** so the `/exec` URL never changes.
 - **Email** (MailApp): booking confirmation (date, time, block, "arrive within 5 minutes or your slot releases," cancel link) and cancellation confirmation. If MailApp throws after the row is written, `book` still returns success with `emailSent: false` (SPA shows the banner in §4). Quota: 1,500 recipients/day on Workspace, 100/day on a personal account — both far above the ~25/day ceiling here.
-- **Teacher convenience menu** (`onOpen`): "Cancel selected booking + email student" · "Block a date…" (writes the Blocked row, then lists that date's non-cancelled bookings and offers cancel-all + email in one confirmation) · "Cancel all bookings for a date…" (optional rosterId / created-after filter, emails each affected student — the cleanup tool if the class code leaks).
+- **Teacher convenience menu** (`onOpen`): "Cancel selected booking + email student" · "Block a date…" (writes the Blocked row, then lists that date's non-cancelled bookings and offers cancel-all + email in one confirmation) · "Cancel all bookings for a date…" (optional rosterId / created-after filter, emails each affected student — the cleanup tool if the class code leaks) · "Check roster" (read-only report of Roster rows the booking page skips and why — bad class/active/id/name — plus duplicate ids, clashing display names and missing emails).
 - Load: ~26 steady-state requests/min is concurrency ≈1–2 against the 30-simultaneous-executions cap; the SPA-side jitter and single-fetch rule in §4 keep the 7:30 phone rush under it.
 
 ## 6. Kiosk agent (Windows laptop)
@@ -92,7 +94,7 @@ Python 3.11+ (python.org installer, tcl/tk component checked), stdlib only (`tki
 - At startup: `SetProcessDpiAwareness(1)` (crisp at 125–150 % scaling). During armed windows the agent holds `ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED` so neither idle sleep nor display blanking fights the kiosk.
 
 **Lifecycle**
-- **Armed windows:** 7:25–9:05 and 12:55–2:35 PM on school days (Sun–Thu) whose date (or date+class, for that block) isn't blocked — or `testWindows` from config, which display a visible TEST badge. Outside armed windows the agent is dormant. Teacher mode ends automatically when the next armed window begins (fresh arm).
+- **Armed windows:** 7:25–9:05, 10:35–11:15 (Lunch) and 12:55–2:35 PM on school days (Sun–Thu) whose date (or date+class, for that block) isn't blocked — or `testWindows` from config, which display a visible TEST badge. Outside armed windows the agent is dormant. Teacher mode ends automatically when the next armed window begins (fresh arm).
 - Polls `schedule` every 30 s, **immediately on arming, and immediately on detecting a wake/clock jump**; caches to disk with its fetch date. After 3 failed polls: OFFLINE badge, keep running from cache. The passcode always works offline.
 - **Cache validity:** the cached schedule and `session.json` are valid only while their date equals today's local date. Stale or absent cache while offline (the first-morning-of-the-week case) → the kiosk arms LOCKED with the OFFLINE badge, offers walk-ups from the cached roster, and **never enters RESERVED or posts no-show** — bookings are unknowable.
 - Every UI tick is **stateless**: display = f(cached schedule, local clock, session.json). Crash or reboot mid-slot resumes the session. Clock-drift warning if local clock differs from `serverTime` by >60 s.
@@ -163,13 +165,14 @@ Google Calendar holiday sync (auto-block non-meeting days) · per-student worksp
 - Stack: GH Pages SPA + Apps Script/Sheet + Python tkinter agent (chosen over all-Google, serverless, all-GitHub).
 - Identity: roster dropdown + shared class code. All students have school Google Workspace email.
 - Slot rules: overtime-when-free, no-show auto-release at 5 min, walk-up claiming, cancel link in email — all enabled.
-- 15-min × 6 slots per block; solo only.
+- 15-min slots, 6 per class block (2 for Lunch); solo only.
 - Block times 7:30–9:00 and 1:00–2:30 PM; no non-meeting days handled in v1 (manual Blocked tab; calendar sync deferred to v2).
 - No-shows consume the student's daily booking; walk-ups never do. Walk-ups are Log-only (no Bookings rows).
 - The laptop is the teacher's personal machine — agent stays dormant outside armed windows; no IT constraints.
 - Per-student workspaces deferred to v2 (students already use their own folders under `C:\students\caps\dev\`).
 - Rate limits: non-issue in practice (high-tier plan, two weeks of real use).
 - Rev 1.1: all seven review lenses' findings accepted and folded in (walk-up race, Sheets date coercion, Win+D recovery, watchdog fail-closed, teacher-mode status transitions, cache date-validity, blocked precedence, event idempotency + sync badges, privacy tightenings, setup/test-mode sections added).
+- Rev 1.6 (owner's call): **Lunch block** 10:40–11:10 (2 slots), open to every active student; the 1-booking-per-day rule counts it like any other block. **Class names**: Config `blockAName` / `blockBName` label the page, kiosk and emails, and are accepted in Roster.class and Blocked.class; data keeps the ids A/L/B, so existing bookings and logs are unaffected. Names live in the Sheet, not the repo (§3 hygiene). A Blocked row's class now matches by name too — before, an unrecognized value such as a class name widened to the whole day. **Timeshare → Check roster** added after a roster typed with class names was silently skipped. The README rehearsal test window moved to 11:20, since a test window overlapping a real block (now including Lunch) is ignored.
 - Rev 1.5 (owner's call): the class code is **off by default**. The roster is one class and the code was shared, not per student, so it added a step without telling students apart. It stays built in behind the Config checkbox `requireClassCode` (ticked = the page asks for it and `book` checks it; blank/unticked = neither). A blank cell counts as off, so a Sheet set up before rev 1.5 needs no edits. `schedule` reports the switch as `classCodeRequired`; a booking page talking to an older backend that doesn't send it keeps asking for the code.
 - Rev 1.4 (during setup, owner's call): the booking page is branded **"CAPS AI Terminal Booking"** in the school's colours with its globe logo (matching the teacher's other school tool), relaxing the §3 "no school/class name" rule for the page's branding only. Student data, full names, emails and secrets stay out of the repo as before. Email sender name is set per-deployment via `MAIL_NAME` in the pasted `Code.gs`.
 - Rev 1.3 (during setup): the school week is **Sunday–Thursday**, not Mon–Fri. "Weekday" everywhere means a Sun–Thu school day: `SCHOOL_DAYS` in `backend/Code.gs` and `SCHOOL_WEEKDAYS` in `agent/core.py` (kept in sync).

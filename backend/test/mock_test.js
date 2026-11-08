@@ -97,6 +97,7 @@ class Sheet {
 }
 class Spreadsheet {
   constructor() { this.sheets = [new Sheet('Sheet1')]; this.tz = 'Etc/UTC'; }
+  getName() { return 'Timeshare (test)'; }
   getSheetByName(n) { return this.sheets.find(s => s.name === n) || null; }
   insertSheet(n) { const s = new Sheet(n); this.sheets.push(s); return s; }
   getSheets() { return this.sheets; }
@@ -229,8 +230,8 @@ check('privacy: ended slots are "past" with no name; current slot keeps name', (
   b.fmt[`${n + 1},2`] = '@';
   b.getRange(n + 1, 1, 1, 9).setValues([['b-cur', '2026-11-09', 'A', 3, 'rT3', 'Test Charlie', 'done', 't-cur', '']]);
   const s = get();
-  assert.deepStrictEqual(slotOf(s, '2026-11-09', 'A', 1), { i: 1, start: '07:30', status: 'past' });
-  assert.deepStrictEqual(slotOf(s, '2026-11-09', 'A', 3), { i: 3, start: '08:00', status: 'done', displayName: 'Test Charlie' });
+  assert.deepStrictEqual(slotOf(s, '2026-11-09', 'A', 1), { i: 1, start: '07:30', code: 'A1', status: 'past' });
+  assert.deepStrictEqual(slotOf(s, '2026-11-09', 'A', 3), { i: 3, start: '08:00', code: 'A3', status: 'done', displayName: 'Test Charlie' });
 });
 
 check('blocked at every granularity (date, date+class, date+class+slot) and precedence', () => {
@@ -365,6 +366,85 @@ check('re-running setup() never resets the requireClassCode switch', () => {
   setRequireCode(true);
   ctx.setup();
   assert.strictEqual(ss.getSheetByName('Config').getRange(2, 3).getValue(), true);
+});
+
+// ---- class names (Config.blockAName / blockBName), the Lunch block, and checkRoster ----
+const cfgSh = ss.getSheetByName('Config');
+const lastMail = () => sent[sent.length - 1];
+roster.getRange(6, 1, 2, 6).setValues([
+  ['rN1', 'Name One', 'Nina N.', 'nina@example.com', 'cd', true],    // class names as the teacher types them
+  ['rN2', 'Name Two', 'Gus G.', 'gus@example.com', ' EF ', true]]);
+
+check('class names not set in Config: CD/EF rows are skipped, and checkRoster says how to fix it', () => {
+  assert.deepStrictEqual(cfgSh.getRange(1, 4, 1, 2).getValues()[0], ['blockAName', 'blockBName']);
+  assert.ok(!get().roster.some(p => p.rosterId === 'rN1' || p.rosterId === 'rN2'));
+  const msg = ctx.checkRoster();
+  assert.ok(msg.includes('rows 6–7') && msg.includes('Found: "cd", "EF"'), msg);
+  assert.ok(msg.includes('blockAName for the 7:30 class'), msg);
+  assert.ok(msg.includes('row 5') && msg.includes('FALSE (unticked)'), 'rT4 inactive: ' + msg);
+});
+
+check('class names set: roster, labels and slot codes use them; Lunch sits between the blocks', () => {
+  cfgSh.getRange(2, 4, 1, 2).setValues([['CD', 'EF']]);
+  const s = get();
+  const cls = id => s.roster.find(p => p.rosterId === id).class;
+  assert.deepStrictEqual([cls('rN1'), cls('rN2')], ['A', 'B']);
+  const day = s.days.find(d => d.date === '2026-11-10');
+  assert.deepStrictEqual(day.classes.map(c => [c.class, c.label, c.open]),
+    [['A', 'CD', false], ['L', 'Lunch', true], ['B', 'EF', false]]);
+  assert.deepStrictEqual(day.classes[1].slots.map(x => [x.i, x.start, x.code]), [[1, '10:40', 'Lunch 1'], [2, '10:55', 'Lunch 2']]);
+  assert.strictEqual(slotOf(s, '2026-11-10', 'A', 3).code, 'CD3');
+  assert.strictEqual(slotOf(s, '2026-11-10', 'B', 6).code, 'EF6');
+  assert.strictEqual(ctx.slotCode_({ blockNames: { A: 'P1', B: 'Period 5' } }, 'A', 3), 'P1 3', 'space after a digit');
+  assert.strictEqual(ctx.slotCode_({ blockNames: { A: 'P1', B: 'Period 5' } }, 'B', 2), 'Period 5 2');
+});
+
+check('booking: own class block by name, Lunch open to any class, 1 booking/day includes Lunch', () => {
+  let r = book('rN1', '2026-11-10', 'A', 3);
+  assert.strictEqual(r.ok, true, JSON.stringify(r));
+  assert.ok(lastMail().body.includes('(CD, slot 3)'), lastMail().body);
+  assert.strictEqual(book('rN1', '2026-11-12', 'B', 3).error, 'wrong_block');
+  r = book('rN2', '2026-11-10', 'L', 2);                         // a EF student at lunch
+  assert.strictEqual(r.ok, true, JSON.stringify(r));
+  assert.ok(lastMail().body.includes('(Lunch, slot 2)'), lastMail().body);
+  assert.deepStrictEqual(slotOf(get(), '2026-11-10', 'L', 2), { i: 2, start: '10:55', code: 'Lunch 2', status: 'booked', displayName: 'Gus G.' });
+  assert.strictEqual(book('rN2', '2026-11-10', 'B', 2).error, 'already_booked_today', 'lunch uses the day');
+  assert.strictEqual(book('rT1', '2026-11-12', 'L', 3).error, 'bad_request', 'lunch has 2 slots');
+  assert.strictEqual(book('rT1', '2026-11-12', 'L', 1).ok, true, 'an CD student at lunch');
+  const cancel = post({ action: 'cancel', token: ss.getSheetByName('Bookings').getRange(ss.getSheetByName('Bookings').getLastRow(), 8).getValue() });
+  assert.deepStrictEqual([cancel.booking.code, cancel.booking.label], ['Lunch 1', 'Lunch']);
+});
+
+check('Blocked rows accept class names and "Lunch" (no longer widen to the whole day)', () => {
+  const bl = ss.getSheetByName('Blocked');
+  bl.getRange(5, 1, 2, 4).setValues([['2026-11-16', 'ef', '', 'trip'], ['2026-11-16', 'Lunch', 2, 'meeting']]);
+  fakeNowMs = Date.parse('2026-11-12T08:05:00+03:00');       // so the 16th is in the window
+  const d = get().days.find(x => x.date === '2026-11-16');
+  fakeNowMs = Date.parse('2026-11-09T08:05:00+03:00');
+  assert.strictEqual(d.blocked, false);
+  assert.deepStrictEqual(d.classes.map(c => c.blocked), [false, false, true]);
+  assert.deepStrictEqual(d.classes[1].slots.map(x => x.status), ['open', 'blocked']);
+});
+
+check('checkRoster: counts by class name, and flags missing ids, emails and clashing names', () => {
+  let msg = ctx.checkRoster();
+  assert.ok(msg.includes('6 students on the Roster tab: 5 show on the booking page (3 in CD, 2 in EF), 1 is skipped.'), msg);
+  assert.ok(!msg.includes('Also worth fixing'), msg);
+  roster.getRange(8, 1, 4, 6).setValues([
+    ['', 'No Id', 'No Id', 'x@example.com', 'CD', true],
+    ['', '', '', '', '', ''],                                           // blank row: ignored
+    ['rT2', 'Dup Id', 'Dup Id', 'y@example.com', 'EF', true],
+    ['rN9', 'Clash', 'Nina N.', '', 'EF', true]]);
+  msg = ctx.checkRoster();
+  assert.ok(msg.includes('Column A (rosterId) is empty: row 8.'), msg);
+  assert.ok(msg.includes('rosterId "rT2" is on rows 3, 10.'), msg);
+  assert.ok(msg.includes('rows 6, 11 have the same displayName'), msg);
+  assert.ok(msg.includes('Column D (email) is empty on row 11.'), msg);
+  roster.getRange(1, 5).setValue('Block');
+  assert.ok(ctx.checkRoster().includes('Column E is headed "Block", expected "class".'));
+  roster.getRange(1, 5).setValue('class');
+  roster.cells = Object.fromEntries(Object.entries(roster.cells).filter(([k]) => k.startsWith('1,')));
+  assert.ok(ctx.checkRoster().includes('The Roster tab has no students'));
 });
 
 console.log(`\n${pass} backend mock checks passed`);

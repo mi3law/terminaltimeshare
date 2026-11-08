@@ -18,13 +18,17 @@ from typing import Any, Iterable, Optional
 # --------------------------------------------------------------------------- constants (§2, §6)
 
 SLOT_MINUTES = 15
-SLOTS_PER_BLOCK = 6
 # School week Sun–Thu, in Python's date.weekday() numbering (Mon=0 … Sun=6).
 # Keep in sync with SCHOOL_DAYS in backend/Code.gs (which uses 0=Sun … 6=Sat).
 SCHOOL_WEEKDAYS = frozenset({6, 0, 1, 2, 3})
-BLOCK_START_MIN = {"A": 7 * 60 + 30, "B": 13 * 60}     # A 7:30–9:00, B 1:00–2:30 PM
-ARM_LEAD = timedelta(minutes=5)                        # armed 7:25 / 12:55 …
-ARM_TAIL = timedelta(minutes=5)                        # … until 9:05 / 2:35
+# Blocks — keep in sync with BLOCKS / BLOCK_START_MIN / BLOCK_SLOTS in backend/Code.gs.
+# A and B are class blocks; L (lunch) is open to every student.
+BLOCK_START_MIN = {"A": 7 * 60 + 30, "L": 10 * 60 + 40, "B": 13 * 60}   # 7:30–9:00, 10:40–11:10, 1:00–2:30 PM
+BLOCK_SLOTS = {"A": 6, "L": 2, "B": 6}
+OPEN_BLOCKS = frozenset({"L"})
+BLOCK_FALLBACK_LABEL = {"A": "Block A", "L": "Lunch", "B": "Block B"}   # until a schedule names them
+ARM_LEAD = timedelta(minutes=5)                        # armed 7:25 / 10:35 / 12:55 …
+ARM_TAIL = timedelta(minutes=5)                        # … until 9:05 / 11:15 / 2:35
 NO_SHOW_AFTER = timedelta(minutes=5)
 JIT_GRACE = timedelta(seconds=30)
 WARN_ORANGE_SEC = 5 * 60
@@ -66,8 +70,12 @@ class Block:
         return self.slot_start(i) + timedelta(minutes=self.slot_minutes)
 
     @property
+    def slots(self) -> int:
+        return BLOCK_SLOTS.get(self.cls, 6)
+
+    @property
     def end(self) -> datetime:
-        return self.slot_end(SLOTS_PER_BLOCK)
+        return self.slot_end(self.slots)
 
     @property
     def armed_start(self) -> datetime:
@@ -97,7 +105,7 @@ class Block:
 
 
 def parse_test_windows(raw: Any) -> tuple[list[dict], list[str]]:
-    """Validates config testWindows: [{"block": "A"|"B", "start": "HH:MM", "date"?: "YYYY-MM-DD",
+    """Validates config testWindows: [{"block": "A"|"L"|"B", "start": "HH:MM", "date"?: "YYYY-MM-DD",
     "slotMinutes"?: int}]. Returns (valid windows, error messages); invalid entries are dropped."""
     out, errors = [], []
     if raw in (None, ""):
@@ -108,7 +116,7 @@ def parse_test_windows(raw: Any) -> tuple[list[dict], list[str]]:
         try:
             cls = str(w["block"]).upper()
             if cls not in BLOCK_START_MIN:
-                raise ValueError("block must be A or B")
+                raise ValueError("block must be A, L or B")
             hh, mm = str(w["start"]).split(":")
             start_min = int(hh) * 60 + int(mm)
             if not (0 <= start_min < 24 * 60):
@@ -206,10 +214,29 @@ def slot_info(sched: Optional[dict], d: str, cls: str, i: int) -> dict:
 
 
 def roster_for(cache: Optional[dict], cls: str) -> list[dict]:
-    """Active roster of one class from the cache — any date (walk-ups work from a stale cache)."""
+    """Active roster for a block from the cache — any date (walk-ups work from a stale cache).
+    A class block lists its class; an open block (lunch) lists everyone."""
     data = (cache or {}).get("data") or {}
-    people = [p for p in data.get("roster") or [] if p.get("class") == cls and p.get("rosterId")]
+    people = [p for p in data.get("roster") or []
+              if (cls in OPEN_BLOCKS or p.get("class") == cls) and p.get("rosterId")]
     return sorted(people, key=lambda p: str(p.get("displayName", "")).lower())
+
+
+def block_label(cache: Optional[dict], cls: str) -> str:
+    """The block's name from the cached schedule (the teacher's class names, "Lunch") — any date,
+    like roster_for — else a fallback."""
+    for day in ((cache or {}).get("data") or {}).get("days") or []:
+        c = _class(day, cls)
+        if c and c.get("label"):
+            return str(c["label"])
+    return BLOCK_FALLBACK_LABEL.get(cls, f"Block {cls}")
+
+
+def slot_code(cache: Optional[dict], cls: str, i: int) -> str:
+    """Short slot name, same rule as the backend's slotCode_: "CD3", "Lunch 1", "A3"."""
+    label = block_label(cache, cls)
+    short = cls if label == f"Block {cls}" else label
+    return f"{short}{' ' if len(short) > 3 or short[-1:].isdigit() else ''}{i}"
 
 
 def roster_id_for(cache: Optional[dict], cls: str, display_name: Optional[str]) -> Optional[str]:
@@ -223,7 +250,7 @@ def compute_session_end(block: Block, sched: Optional[dict], start_slot: int) ->
     are unknowable, so a session gets only its own slot (no overtime)."""
     if sched is None:
         return block.slot_end(start_slot)
-    for j in range(start_slot + 1, SLOTS_PER_BLOCK + 1):
+    for j in range(start_slot + 1, block.slots + 1):
         if slot_info(sched, block.date, block.cls, j)["status"] in ENDS_SESSION:
             return block.slot_start(j)
     return block.end
@@ -413,7 +440,7 @@ class TickResult:
 
 def _rows(block: Block, sched: Optional[dict], st: dict, now: datetime) -> list:
     rows = []
-    for i in range(1, SLOTS_PER_BLOCK + 1):
+    for i in range(1, block.slots + 1):
         info = slot_info(sched, block.date, block.cls, i)
         status, name = info["status"], info.get("displayName")
         if status != "blocked" and block.slot_end(i) <= now:
@@ -480,7 +507,7 @@ def tick(now: datetime, state: Any, cache: Optional[dict], test_windows: Iterabl
         return TickResult(view, st, events)
 
     if sched is not None and block_is_blocked(sched, block.date, block.cls):
-        view.note = "Blocked today" if (_day(sched, block.date) or {}).get("blocked") else f"Block {block.cls} blocked today"
+        view.note = "Blocked today" if (_day(sched, block.date) or {}).get("blocked") else f"{block_label(cache, block.cls)} blocked today"
         view.block = block
         return TickResult(view, st, events)
 

@@ -69,7 +69,7 @@ Delete the hello-world project afterwards.
    - fills **Config** with a random `classCode` and `agentKey` if they're empty, and adds an unticked `requireClassCode` checkbox (students aren't asked for the code until you tick it).
 
    It is safe to run again; it never deletes data.
-6. Reload the Sheet. A **Timeshare** menu appears (Cancel selected booking + email student · Block a date… · Cancel all bookings for a date…).
+6. Reload the Sheet. A **Timeshare** menu appears (Cancel selected booking + email student · Block a date… · Cancel all bookings for a date… · Check roster · Run setup()).
 
 ### 2.2 Fill in the Roster and Config tabs
 
@@ -82,11 +82,15 @@ Delete the hello-world project afterwards.
 
 - `rosterId` is an **opaque id you make up for this system** (`r01`…`r24`). Never use a school student ID or an email prefix.
 - `displayName` is what everyone sees on the public grid. Keep it short, and de-duplicate collisions by hand ("Maya Ro." / "Maya Re.").
-- `class` is `A` (the 7:30–9:00 block) or `B` (the 1:00–2:30 PM block).
+- `class` is the student's class: `A` (the 7:30–9:00 block) or `B` (the 1:00–2:30 PM block), or your own class names once you've set them in **Config** (below), e.g. `CD` and `EF`.
+- Every active student can also book **Lunch** (10:40–11:10, two slots), whatever their class.
 - `active` is `TRUE` to show the student; set it to `FALSE` to hide them without deleting history.
 - Full names and emails never leave the Sheet.
+- When you've filled it in, run **Timeshare → Check roster**. It lists any row the booking page skips, and why.
 
-**Config** has row 2 = `classCode`, `agentKey`, `requireClassCode`. Leave `agentKey` as the random value; you'll copy it into the laptop's `config.json`.
+**Config** has row 2 = `classCode`, `agentKey`, `requireClassCode`, `blockAName`, `blockBName`. Leave `agentKey` as the random value; you'll copy it into the laptop's `config.json`.
+
+- `blockAName` / `blockBName` (optional): your names for the 7:30 class and the 1:00 class, e.g. `CD` and `EF`. The booking page, the kiosk and the emails then say *CD* instead of *Block A*, and the Roster `class` column (and the Blocked tab) can use them. Blank = *Block A* / *Block B*. A Sheet set up before these columns existed: run `setup()` again to add the headers, then type the names in row 2.
 
 - `requireClassCode` is **unticked by default**: the booking page doesn't ask for a code, and anyone with the page URL can book as any student on the roster. Tick it to make students type `classCode` when they book. It takes effect right away (open booking pages pick it up within about a minute), and `classCode` keeps its value while it's off.
 - If you turn it on, change `classCode` to something easy to post on the wall.
@@ -256,7 +260,7 @@ Check it on a phone. The grid shows the next 5 school days; book a test slot wit
 6. **Power, once:** Control Panel → Power Options → *Choose what closing the lid does* → **Plugged in: Do nothing**. In class, keep the laptop plugged in with the lid open; closing the lid or a critical battery overrides the agent's keep-awake.
 7. **Projector:** *Duplicate* (Win+P) is simplest. *Extend* also works: the agent blacks out the second screen while locked.
 
-**How it behaves:** the agent arms at **7:25–9:05** and **12:55–2:35 PM** on school days (**Sunday–Thursday**) that aren't blocked. Outside those times it is completely invisible ("dormant").
+**How it behaves:** the agent arms at **7:25–9:05**, **10:35–11:15** (Lunch) and **12:55–2:35 PM** on school days (**Sunday–Thursday**) that aren't blocked. Outside those times it is completely invisible ("dormant").
 
 - **To see its status:** double-click the shortcut again. A second copy can't start; it tells the running one to open a small **status window** (mode, last schedule fetch, pending log events, badges). It also offers **Arm now** (re-arm from teacher mode) and **Quit agent**, both behind the passcode. Quitting also stops the watchdog; double-click the shortcut to start again.
 - **Badges** on the lock screen:
@@ -282,10 +286,10 @@ Check it on a phone. The grid shows the next 5 school days; book a test slot wit
 Rehearse with **test students** under a **test window**. A test window arms the kiosk at a time you choose and plays *today's real bookings* for one block (by slot number) at that time. Add one to `config.json` and restart the agent:
 
 ```json
-"testWindows": [{ "block": "B", "start": "10:00" }]
+"testWindows": [{ "block": "B", "start": "11:20" }]
 ```
 
-That arms 9:55–11:35 with B1 at 10:00, B2 at 10:15, … B6 at 11:15, using today's **Block B** bookings, which you can still make on the booking page because B's real slots (1:00 PM onwards) are in the future. Do it on a school-day morning. Optional fields: `"date": "YYYY-MM-DD"` (only that day) and `"slotMinutes": 15`.
+That arms 11:15–12:55 with B1 at 11:20, B2 at 11:35, … B6 at 12:35, using today's **Block B** bookings, which you can still make on the booking page because B's real slots (1:00 PM onwards) are in the future. Do it on a school-day morning. It's the only full 6-slot gap that fits: a test window that overlaps a real block, Lunch included, is ignored. For a shorter rehearsal at any free time, add `"slotMinutes": 5`. Optional fields: `"date": "YYYY-MM-DD"` (only that day) and `"slotMinutes": 15`.
 
 - The TEST badge shows the whole time.
 - Test windows are *added to* the real windows. Real class blocks still arm normally, and a test window overlapping a real block is ignored.
@@ -307,6 +311,7 @@ Re-add the test students (`addTestStudents`), then check off each item (SPEC §1
 - [ ] Reboot mid-session: it resumes.
 - [ ] Teacher passcode during a session marks the booking `done` with the real minutes.
 - [ ] Block today (date-level) with the menu: the kiosk stays dormant.
+- [ ] Lunch: a test student from the *other* class books a Lunch slot; the kiosk arms at 10:35, shows them as RESERVED at their slot, and the walk-up list shows every student.
 - [ ] Put a wrong `agentKey` in `config.json` and restart: **EVENTS FAILING — check agentKey** appears. Put it back.
 
 Clean up the test rows afterwards (§3.6).
@@ -329,7 +334,8 @@ Clean up the test rows afterwards (§3.6).
 | Forgive a wrong no-show | Set the row's status to **`done`** (day stays used, mark cleared) or **`cancelled`** (student can rebook today). **Never set it back to `booked`**: the kiosk would immediately fire the no-show again. |
 | Cancel one booking | Select its row in Bookings → **Timeshare → Cancel selected booking + email student**. |
 | Day off / substitute / no-AI day | **Timeshare → Block a date…** (blank class = whole day). It lists that date's bookings and offers to cancel and email them all in one step. Blocking never silently cancels. The kiosk stays dormant on a blocked day. |
-| Block one block or one slot | Same menu, with a class letter (and optionally a slot number 1–6). |
+| Block one block or one slot | Same menu, with a block: your class name (or `A`/`B`) or `Lunch`, and optionally a slot number (1–6, or 1–2 for Lunch). |
+| A student is missing from the name list | **Timeshare → Check roster**. It names the row and what's wrong (usually the `class` or `active` column). |
 | Turn the class code on or off | Tick or untick `requireClassCode` in **Config**. Open booking pages pick it up within about a minute. |
 | Fake bookings / class code leaked | Tick `requireClassCode` in **Config** if it's off, or change `classCode` if it's on. Then **Timeshare → Cancel all bookings for a date…** (optional rosterId and "created after" filters; it emails each affected student). |
 | Who used it? | The **Log** tab: sessions, minutes, no-shows, walk-ups. Read it as *supervised trust*: the machine doesn't verify who is at the keyboard. |

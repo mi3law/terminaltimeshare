@@ -24,13 +24,13 @@ ROSTER = [
 ]
 
 
-def sched(d=MON, slots=None, day_blocked=False, class_blocked=()):
-    """slots: {("A", 3): ("booked", "Maya R.") | "blocked" | ...}"""
+def sched(d=MON, slots=None, day_blocked=False, class_blocked=(), labels=None):
+    """slots: {("A", 3): ("booked", "Maya R.") | "blocked" | ...}; labels: {"A": "CD", ...}"""
     slots = slots or {}
     classes = []
     for cls, base in core.BLOCK_START_MIN.items():
         ss = []
-        for i in range(1, 7):
+        for i in range(1, core.BLOCK_SLOTS[cls] + 1):
             v = slots.get((cls, i), "open")
             status, name = (v, None) if isinstance(v, str) else v
             m = base + (i - 1) * 15
@@ -38,7 +38,10 @@ def sched(d=MON, slots=None, day_blocked=False, class_blocked=()):
             if name:
                 s["displayName"] = name
             ss.append(s)
-        classes.append({"class": cls, "blocked": cls in class_blocked, "slots": ss})
+        entry = {"class": cls, "blocked": cls in class_blocked, "slots": ss}
+        if labels:
+            entry["label"] = labels[cls]
+        classes.append(entry)
     return {"ok": True, "roster": ROSTER, "days": [{"date": d, "blocked": day_blocked, "classes": classes}]}
 
 
@@ -89,8 +92,51 @@ class SlotMath(unittest.TestCase):
         self.assertEqual(tick(at("13:10", SUN), None, None).view.mode, LOCKED)
 
     def test_next_armed_start(self):
-        self.assertEqual(core.next_armed_start(at("10:00")), at("12:55"))
+        self.assertEqual(core.next_armed_start(at("10:00")), at("10:35"))          # lunch
+        self.assertEqual(core.next_armed_start(at("11:15")), at("12:55"))
         self.assertEqual(core.next_armed_start(at("15:00", "2026-11-12")), at("07:25", SUN))   # Thu → Sun
+
+
+class Lunch(unittest.TestCase):
+    def blk(self):
+        return Block("L", MON, core.BLOCK_START_MIN["L"])
+
+    def test_two_slots_and_armed_window(self):
+        self.assertEqual([self.blk().slot_start(i).strftime("%H:%M") for i in (1, 2)], ["10:40", "10:55"])
+        self.assertEqual(self.blk().end, at("11:10"))
+        self.assertIsNone(core.active_block(at("10:34", sec=59)))
+        self.assertEqual(core.active_block(at("10:35")).cls, "L")
+        self.assertEqual(core.active_block(at("11:14", sec=59)).cls, "L")
+        self.assertIsNone(core.active_block(at("11:15")))
+
+    def test_overtime_stops_at_lunch_end(self):
+        self.assertEqual(core.compute_session_end(self.blk(), sched(), 1), at("11:10"))
+
+    def test_walkup_list_is_everyone(self):
+        names = [p["displayName"] for p in core.roster_for(cache(sched()), "L")]
+        self.assertEqual(names, ["Lee P.", "Maya R.", "Sam K."])
+
+    def test_student_from_any_class_is_reserved_and_no_show_names_them(self):
+        c = cache(sched(slots={("L", 2): ("booked", "Lee P.")}))      # Lee P. is in class B
+        r = tick(at("10:55"), None, c)
+        self.assertEqual((r.view.mode, r.view.reserved_name), (RESERVED, "Lee P."))
+        r = tick(at("11:00"), roundtrip(r.state), c)
+        ns = [e for e in r.events if e["type"] == "no_show"]
+        self.assertEqual([(e["class"], e["slot"], e["rosterId"]) for e in ns], [("L", 2, "r03")])
+
+    def test_labels_and_slot_codes(self):
+        c = cache(sched(labels={"A": "CD", "L": "Lunch", "B": "EF"}), "2026-11-01")   # any date
+        self.assertEqual((core.block_label(c, "A"), core.slot_code(c, "A", 3)), ("CD", "CD3"))
+        self.assertEqual(core.slot_code(c, "L", 1), "Lunch 1")
+        self.assertEqual((core.block_label(None, "B"), core.slot_code(None, "B", 2)), ("Block B", "B2"))
+        self.assertEqual(core.slot_code(None, "L", 2), "Lunch 2")
+        p = cache(sched(labels={"A": "P1", "L": "Lunch", "B": "Period 5"}))
+        self.assertEqual((core.slot_code(p, "A", 3), core.slot_code(p, "B", 2)), ("P1 3", "Period 5 2"))
+
+    def test_lunch_test_window(self):
+        tw, errs = core.parse_test_windows([{"block": "l", "start": "16:00"}])
+        self.assertEqual(errs, [])
+        self.assertEqual(core.active_block(at("16:10"), tw).end, at("16:30"))
 
 
 class TestWindows(unittest.TestCase):
@@ -279,7 +325,7 @@ class SessionEnd(unittest.TestCase):
     def test_woke_after_block_finalizes_with_capped_minutes(self):
         c = cache(sched())
         st, _ = core.start_session(at("08:30"), None, self.block_a(), 5, "walkup", "r02", "Sam K.", c["data"])
-        r = tick(at("11:00"), st, c)                       # laptop slept through the end
+        r = tick(at("10:00"), st, c)                       # laptop slept through the end (before lunch arms)
         self.assertEqual(r.view.mode, DORMANT)
         self.assertEqual(r.events[0]["minutes"], 30.0)
 
