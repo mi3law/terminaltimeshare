@@ -1,40 +1,41 @@
-/* AI Terminal Booking — mobile-first, no frameworks. */
+/* CAPS AI Terminal Booking — mobile-first, no frameworks.
+   One look, matching the school's other tools: school blue (#233e82), white words, gold for
+   what you can act on (open slots, the Book button, focus). Dark-only by design. */
 :root {
-  --bg: #f6f7f9;
-  --card: #ffffff;
-  --ink: #1d2330;
-  --muted: #6b7280;
-  --line: #e3e6eb;
-  --open: #0f766e;
-  --open-bg: #e6f4f2;
-  --booked-bg: #eef0f4;
-  --mine: #6d28d9;
-  --mine-bg: #f1eafe;
-  --blocked-bg: #fbe9e9;
-  --blocked: #a23b3b;
-  --warn-bg: #fff4dc;
-  --warn: #8a5a00;
-  --ok-bg: #e7f6ec;
-  --ok: #17663a;
+  color-scheme: dark;
+  --bg: #233e82;          /* school blue */
+  --card: #2c4a94;        /* surface */
+  --ink: #f4f6fb;
+  --muted: #c9d2ea;
+  --line: #3d5699;
+  --edge: #a3b0d6;
+  --gold: #ffd98a;        /* action + focus */
+  --navy: #142456;
+  --open: var(--gold);
+  --open-bg: var(--navy);
+  --booked-bg: #3a5aa6;   /* strip */
+  --mine: #fff6dc;
+  --mine-bg: #6b5210;
+  --blocked-bg: #8f3d30;
+  --blocked: #ffe1da;
+  --warn-bg: #3b2d12;
+  --warn: #ffe2a8;
+  --ok-bg: #1d4d3a;
+  --ok: #c8f2d8;
   --radius: 10px;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #111418; --card: #1a1f26; --ink: #e8eaed; --muted: #9aa3ae; --line: #2a313b;
-    --open: #5eead4; --open-bg: #12302d; --booked-bg: #222832; --mine: #c4b5fd; --mine-bg: #2a2342;
-    --blocked-bg: #3a1f22; --blocked: #f19a9a; --warn-bg: #3a2e12; --warn: #f5c86a; --ok-bg: #143022; --ok: #86e0a6;
-  }
 }
 
 * { box-sizing: border-box; }
 body {
   margin: 0;
-  font: 16px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font: 16px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", "Noto Sans Arabic", sans-serif;
   background: var(--bg);
   color: var(--ink);
 }
-.top { padding: 16px 16px 4px; }
-h1 { margin: 0; font-size: 1.4rem; }
+.top { padding: 16px 16px 4px; max-width: 1200px; margin: 0 auto; }
+h1.wordmark { display: flex; align-items: center; gap: 10px; margin: 0; font-size: 1.3rem; font-weight: 700; letter-spacing: .02em; }
+h1.wordmark img { display: block; width: 36px; height: 36px; flex: none; }
+:focus-visible { outline: 3px solid var(--gold); outline-offset: 2px; }
 .updated { margin: 4px 0 0; color: var(--muted); font-size: .85rem; }
 .updated.stale { color: var(--warn); }
 main { padding: 0 16px 32px; max-width: 1200px; margin: 0 auto; }
@@ -84,29 +85,31 @@ main { padding: 0 16px 32px; max-width: 1200px; margin: 0 auto; }
   .slot .s { max-width: 100%; font-size: .85rem; white-space: normal; overflow-wrap: anywhere; }
 }
 .slot.open { background: var(--open-bg); color: var(--open); border-color: var(--open); cursor: pointer; font-weight: 600; }
-.slot.open:hover, .slot.open:focus-visible { outline: 2px solid var(--open); outline-offset: 1px; }
+.slot.open:hover { background: #1b2f6b; }
+.slot.open:focus-visible { outline: 3px solid var(--gold); outline-offset: 1px; }
 .slot.mine { background: var(--mine-bg); color: var(--mine); font-weight: 600; }
 .slot.blocked { background: var(--blocked-bg); color: var(--blocked); }
-.slot.past { opacity: .5; }
+.slot.past { opacity: .45; }
 .slot.released, .slot.now { background: var(--warn-bg); color: var(--warn); }
 
 button {
-  font: inherit; padding: 10px 16px; border-radius: 8px; border: 0; cursor: pointer;
-  background: var(--open); color: #fff; font-weight: 600;
+  font: inherit; min-height: 44px; padding: 0 20px; border-radius: 999px; cursor: pointer;
+  background: var(--gold); color: var(--navy); border: 2px solid var(--gold); font-weight: 700;
 }
-button.secondary { background: transparent; color: var(--ink); border: 1px solid var(--line); }
+button.secondary { background: transparent; color: var(--ink); border: 2px solid var(--edge); font-weight: 600; }
+button.secondary:hover { border-color: var(--ink); }
 button:disabled { opacity: .6; cursor: default; }
 
 dialog {
   border: 0; border-radius: 14px; padding: 18px; width: min(420px, calc(100vw - 32px));
   background: var(--card); color: var(--ink);
 }
-dialog::backdrop { background: rgba(0, 0, 0, .45); }
+dialog::backdrop { background: rgba(8, 16, 40, .65); }
 dialog h2 { margin: 0 0 12px; font-size: 1.1rem; }
 dialog label { display: block; font-size: .85rem; color: var(--muted); margin: 10px 0 4px; }
 dialog select, dialog input {
   width: 100%; font: inherit; padding: 10px; border-radius: 8px;
-  border: 1px solid var(--line); background: var(--bg); color: var(--ink);
+  border: 1px solid var(--edge); background: var(--navy); color: var(--ink);
 }
 .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
-.error { color: var(--blocked); margin: 10px 0 0; }
+.error { color: #ffb4a6; margin: 10px 0 0; }
