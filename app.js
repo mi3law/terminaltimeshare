@@ -1,7 +1,7 @@
 // =============================================================================
 // TEACHER: paste your Apps Script web-app /exec URL here (public by design).
 // =============================================================================
-const EXEC_URL = 'PASTE_YOUR_APPS_SCRIPT_EXEC_URL_HERE';
+const EXEC_URL = 'https://script.google.com/macros/s/AKfycbwjj68ByES0iy59qaxwh-GTqXo7o81yb68pMDfzBw-Vk1hERK09KU_h6jyLRiYodYNR/exec';
 // =============================================================================
 
 // AI Terminal Booking — vanilla SPA. Contract: SPEC.md §4 (and §5 for the API).
