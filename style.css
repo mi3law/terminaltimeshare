@@ -74,8 +74,15 @@ main { padding: 0 16px 32px; max-width: 1200px; margin: 0 auto; }
   background: var(--booked-bg); color: var(--ink);
   font: inherit; font-size: .9rem; text-align: left;
 }
+.slot { min-width: 0; }
 .slot .t { font-variant-numeric: tabular-nums; white-space: nowrap; }
-.slot .s { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.slot .s { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.block ol > li { min-width: 0; }
+/* Five narrow day columns: stack time over status so names never spill into the next day. */
+@media (min-width: 900px) {
+  .slot { flex-direction: column; align-items: flex-start; justify-content: center; gap: 0; }
+  .slot .s { max-width: 100%; font-size: .85rem; white-space: normal; overflow-wrap: anywhere; }
+}
 .slot.open { background: var(--open-bg); color: var(--open); border-color: var(--open); cursor: pointer; font-weight: 600; }
 .slot.open:hover, .slot.open:focus-visible { outline: 2px solid var(--open); outline-offset: 1px; }
 .slot.mine { background: var(--mine-bg); color: var(--mine); font-weight: 600; }

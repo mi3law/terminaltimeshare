@@ -175,6 +175,7 @@ function slotCell(date, cls, slot, now, myName) {
   else { label = 'Open'; kind = 'open'; }
 
   const cell = el(kind === 'open' ? 'button' : 'div', `slot ${kind}`);
+  cell.title = `${cls}${slot.i} · ${prettyTime(slot.start)} — ${label}`;
   cell.appendChild(el('span', 't', `${cls}${slot.i} · ${prettyTime(slot.start)}`));
   cell.appendChild(el('span', 's', label));
   if (kind === 'open') {
