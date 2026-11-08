@@ -63,9 +63,9 @@ main { padding: 0 16px 32px; max-width: 1200px; margin: 0 auto; }
 .day h2 { font-size: 1rem; margin: 0 0 8px; }
 .day.blocked { background: var(--blocked-bg); color: var(--blocked); }
 .day .note { margin: 0; font-weight: 600; }
-.block { margin-bottom: 10px; }
-.block:last-child { margin-bottom: 0; }
-.block h3 { font-size: .8rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0 0 4px; }
+/* Blocks within a day (class A, Lunch, class B): clear space and a divider between them. */
+.block + .block { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--edge); }
+.block h3 { font-size: .8rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0 0 8px; }
 .block ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
 
 .slot {
