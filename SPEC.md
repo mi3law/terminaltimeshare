@@ -4,7 +4,7 @@ Booking and automatic timekeeping for one shared AI-coding workstation ("the AI 
 
 **Design goals:** minimal, zero-cost, casual-proof (not tamper-proof), teacher-operable from a Google Sheet.
 
-*Rev 1.2 — incorporates a seven-lens adversarial design review (40 findings folded in) plus a requirements-coverage audit (all original requirements and agreed decisions verified covered) and a final author consistency pass.*
+*Rev 1.3 — school week is Sunday–Thursday (see §12). Rev 1.2 — incorporates a seven-lens adversarial design review (40 findings folded in) plus a requirements-coverage audit (all original requirements and agreed decisions verified covered) and a final author consistency pass.*
 
 ## 1. Architecture — three components
 
@@ -21,7 +21,7 @@ The Sheet **is** the admin console: roster, force-cancels, blocked days, config,
 - **Block A (morning):** 7:30–9:00. Slots A1–A6 start 7:30, 7:45, 8:00, 8:15, 8:30, 8:45.
 - **Block B (afternoon):** 1:00–2:30 PM. Slots B1–B6 start 1:00, 1:15, 1:30, 1:45, 2:00, 2:15.
 - 15-minute slots, **solo** (one student per slot).
-- **Booking window:** always the next 5 calendar weekdays including today (if today is a weekday). Blocked dates render as Blocked columns and **never extend the window**. A slot is bookable online only if its start time is in the future.
+- **Booking window:** always the next 5 school days (**Sunday–Thursday**) including today (if today is a school day). Blocked dates render as Blocked columns and **never extend the window**. A slot is bookable online only if its start time is in the future.
 - **Max 1 booking per student per calendar date.** Statuses `booked`, `done`, and `no-show` all consume the day; only `cancelled` frees it.
 - Students may only book slots in **their own class's block** (roster carries class membership).
 - **Walk-ups** (claimed at the machine) are uncapped, recorded only in the Log, and neither require nor consume a booking.
@@ -68,7 +68,7 @@ The Sheet **is** the admin console: roster, force-cancels, blocked days, config,
 | Call | Action | Returns / does |
 |---|---|---|
 | GET | `schedule` | `{serverTime, roster:[{rosterId, displayName, class}], days:[{date, blocked, classes:[{class, blocked, slots:[{i, start, status, displayName?}]}]}]}`. **Privacy rule:** slots whose end time is before serverTime return `status: "past"` with no displayName (the Sheet keeps the real status); the current in-progress slot keeps its real status and name. |
-| POST | `book` | Validates under the script lock: active rosterId · class code · student's class matches block · date in window + weekday · **no Blocked row matches at any granularity (date, date+class, or date+class+slot)** · slot start in future · slot free · no booking that date for that student → writes row, then sends email **after releasing the lock** |
+| POST | `book` | Validates under the script lock: active rosterId · class code · student's class matches block · date in window + school day · **no Blocked row matches at any granularity (date, date+class, or date+class+slot)** · slot start in future · slot free · no booking that date for that student → writes row, then sends email **after releasing the lock** |
 | POST | `cancel` | Token lookup; row must be `booked` **and the slot's start time must be in the future** → marks cancelled, sends cancel-confirmation email |
 | POST | `events` | Requires agentKey. Body: `{agentKey, events:[{eventId, type, date, class, slot, rosterId?, minutes?, ts}]}`. Idempotent by eventId: an eventId already in the Log is silently acked. Appends Log rows; resolves (date, class, slot) to the booking row and applies the status transition table (`session_end → done`, `no_show → no-show`); walk-up events write to the Log only |
 
@@ -92,9 +92,9 @@ Python 3.11+ (python.org installer, tcl/tk component checked), stdlib only (`tki
 - At startup: `SetProcessDpiAwareness(1)` (crisp at 125–150 % scaling). During armed windows the agent holds `ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED` so neither idle sleep nor display blanking fights the kiosk.
 
 **Lifecycle**
-- **Armed windows:** 7:25–9:05 and 12:55–2:35 PM on weekdays whose date (or date+class, for that block) isn't blocked — or `testWindows` from config, which display a visible TEST badge. Outside armed windows the agent is dormant. Teacher mode ends automatically when the next armed window begins (fresh arm).
+- **Armed windows:** 7:25–9:05 and 12:55–2:35 PM on school days (Sun–Thu) whose date (or date+class, for that block) isn't blocked — or `testWindows` from config, which display a visible TEST badge. Outside armed windows the agent is dormant. Teacher mode ends automatically when the next armed window begins (fresh arm).
 - Polls `schedule` every 30 s, **immediately on arming, and immediately on detecting a wake/clock jump**; caches to disk with its fetch date. After 3 failed polls: OFFLINE badge, keep running from cache. The passcode always works offline.
-- **Cache validity:** the cached schedule and `session.json` are valid only while their date equals today's local date. Stale or absent cache while offline (the Monday-morning case) → the kiosk arms LOCKED with the OFFLINE badge, offers walk-ups from the cached roster, and **never enters RESERVED or posts no-show** — bookings are unknowable.
+- **Cache validity:** the cached schedule and `session.json` are valid only while their date equals today's local date. Stale or absent cache while offline (the first-morning-of-the-week case) → the kiosk arms LOCKED with the OFFLINE badge, offers walk-ups from the cached roster, and **never enters RESERVED or posts no-show** — bookings are unknowable.
 - Every UI tick is **stateless**: display = f(cached schedule, local clock, session.json). Crash or reboot mid-slot resumes the session. Clock-drift warning if local clock differs from `serverTime` by >60 s.
 
 **States**
@@ -170,4 +170,5 @@ Google Calendar holiday sync (auto-block non-meeting days) · per-student worksp
 - Per-student workspaces deferred to v2 (students already use their own folders under `C:\students\caps\dev\`).
 - Rate limits: non-issue in practice (high-tier plan, two weeks of real use).
 - Rev 1.1: all seven review lenses' findings accepted and folded in (walk-up race, Sheets date coercion, Win+D recovery, watchdog fail-closed, teacher-mode status transitions, cache date-validity, blocked precedence, event idempotency + sync badges, privacy tightenings, setup/test-mode sections added).
+- Rev 1.3 (during setup): the school week is **Sunday–Thursday**, not Mon–Fri. "Weekday" everywhere means a Sun–Thu school day: `SCHOOL_DAYS` in `backend/Code.gs` and `SCHOOL_WEEKDAYS` in `agent/core.py` (kept in sync).
 - Rev 1.2: requirements-coverage audit passed (all 15 requirements/decisions satisfied, zero holes); final consistency pass added the `Released` grid state, the minimized watchdog shortcut, and the duplicate-instance exit-code rule.

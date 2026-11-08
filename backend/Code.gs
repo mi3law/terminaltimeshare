@@ -30,7 +30,8 @@ var SPA_URL = 'https://YOUR-GITHUB-USERNAME.github.io/terminaltimeshare/';
 
 var SLOT_MINUTES = 15;
 var SLOTS_PER_BLOCK = 6;
-var WINDOW_WEEKDAYS = 5;
+var WINDOW_DAYS = 5;                                    // school days shown/bookable
+var SCHOOL_DAYS = [0, 1, 2, 3, 4];                      // Sun–Thu (0=Sun … 6=Sat); keep in sync with agent/core.py
 var BLOCK_START_MIN = { A: 7 * 60 + 30, B: 13 * 60 };   // A 7:30–9:00, B 1:00–2:30 PM
 var CLASSES = ['A', 'B'];
 var LOCK_WAIT_MS = 10000;
@@ -185,14 +186,13 @@ function addDays_(dateStr, n) {
 
 function pad2_(n) { return (n < 10 ? '0' : '') + n; }
 
-/** The booking window: next WINDOW_WEEKDAYS calendar weekdays, including today if a weekday.
+/** The booking window: next WINDOW_DAYS school days (SCHOOL_DAYS), including today if it is one.
  *  Blocked dates are still included (rendered Blocked) — they never extend the window. */
 function windowDates_(today) {
   var out = [];
-  for (var i = 0; out.length < WINDOW_WEEKDAYS && i < 14; i++) {
+  for (var i = 0; out.length < WINDOW_DAYS && i < 14; i++) {
     var d = addDays_(today, i);
-    var wd = weekday_(d);
-    if (wd !== 0 && wd !== 6) out.push(d);
+    if (SCHOOL_DAYS.indexOf(weekday_(d)) >= 0) out.push(d);
   }
   return out;
 }

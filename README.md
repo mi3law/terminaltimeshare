@@ -168,7 +168,7 @@ The schedule should also report those slots as `"status":"blocked"`.
 
 ### Test 4: cancel after the slot has started is rejected
 
-In the **Bookings** tab, type one row by hand. Use **yesterday's** weekday date, typed as plain text, so the slot has certainly started:
+In the **Bookings** tab, type one row by hand. Use the **previous school day's** date, typed as plain text, so the slot has certainly started:
 
 | id | date | class | slot | rosterId | displayName | status | cancelToken | createdAt |
 |---|---|---|---|---|---|---|---|---|
@@ -251,7 +251,7 @@ Check it on a phone. The grid shows the next 5 school days; book a test slot wit
 6. **Power, once:** Control Panel → Power Options → *Choose what closing the lid does* → **Plugged in: Do nothing**. In class, keep the laptop plugged in with the lid open; closing the lid or a critical battery overrides the agent's keep-awake.
 7. **Projector:** *Duplicate* (Win+P) is simplest. *Extend* also works: the agent blacks out the second screen while locked.
 
-**How it behaves:** the agent arms at **7:25–9:05** and **12:55–2:35 PM** on weekdays that aren't blocked. Outside those times it is completely invisible ("dormant").
+**How it behaves:** the agent arms at **7:25–9:05** and **12:55–2:35 PM** on school days (**Sunday–Thursday**) that aren't blocked. Outside those times it is completely invisible ("dormant").
 
 - **To see its status:** double-click the shortcut again. A second copy can't start; it tells the running one to open a small **status window** (mode, last schedule fetch, pending log events, badges). It also offers **Arm now** (re-arm from teacher mode) and **Quit agent**, both behind the passcode. Quitting also stops the watchdog; double-click the shortcut to start again.
 - **Badges** on the lock screen:
@@ -280,7 +280,7 @@ Rehearse with **test students** under a **test window**. A test window arms the 
 "testWindows": [{ "block": "B", "start": "10:00" }]
 ```
 
-That arms 9:55–11:35 with B1 at 10:00, B2 at 10:15, … B6 at 11:15, using today's **Block B** bookings, which you can still make on the booking page because B's real slots (1:00 PM onwards) are in the future. Do it on a weekday morning. Optional fields: `"date": "YYYY-MM-DD"` (only that day) and `"slotMinutes": 15`.
+That arms 9:55–11:35 with B1 at 10:00, B2 at 10:15, … B6 at 11:15, using today's **Block B** bookings, which you can still make on the booking page because B's real slots (1:00 PM onwards) are in the future. Do it on a school-day morning. Optional fields: `"date": "YYYY-MM-DD"` (only that day) and `"slotMinutes": 15`.
 
 - The TEST badge shows the whole time.
 - Test windows are *added to* the real windows. Real class blocks still arm normally, and a test window overlapping a real block is ignored.

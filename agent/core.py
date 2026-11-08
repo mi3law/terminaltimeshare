@@ -19,6 +19,9 @@ from typing import Any, Iterable, Optional
 
 SLOT_MINUTES = 15
 SLOTS_PER_BLOCK = 6
+# School week Sun–Thu, in Python's date.weekday() numbering (Mon=0 … Sun=6).
+# Keep in sync with SCHOOL_DAYS in backend/Code.gs (which uses 0=Sun … 6=Sat).
+SCHOOL_WEEKDAYS = frozenset({6, 0, 1, 2, 3})
 BLOCK_START_MIN = {"A": 7 * 60 + 30, "B": 13 * 60}     # A 7:30–9:00, B 1:00–2:30 PM
 ARM_LEAD = timedelta(minutes=5)                        # armed 7:25 / 12:55 …
 ARM_TAIL = timedelta(minutes=5)                        # … until 9:05 / 2:35
@@ -123,10 +126,10 @@ def parse_test_windows(raw: Any) -> tuple[list[dict], list[str]]:
 
 
 def blocks_for_day(today: date, test_windows: Iterable[dict] = ()) -> list[Block]:
-    """Real blocks (weekdays only) plus any test blocks for today. A test block whose armed
+    """Real blocks (school days only) plus any test blocks for today. A test block whose armed
     window overlaps a real one is dropped — real class time always wins."""
     ds = today.isoformat()
-    real = [Block(c, ds, m) for c, m in BLOCK_START_MIN.items()] if today.weekday() < 5 else []
+    real = [Block(c, ds, m) for c, m in BLOCK_START_MIN.items()] if today.weekday() in SCHOOL_WEEKDAYS else []
     tests = []
     for w in test_windows:
         if w.get("date") not in (None, ds):

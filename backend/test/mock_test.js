@@ -145,20 +145,22 @@ check('setup creates exact headers and timezone', () => {
   assert.ok(CODE && KEY);
 });
 
-check('schedule window = 5 weekdays from Monday', () => {
+check('schedule window = next 5 Sun–Thu school days from Monday', () => {
   const s = get();
-  assert.deepStrictEqual(s.days.map(d => d.date), ['2026-11-09', '2026-11-10', '2026-11-11', '2026-11-12', '2026-11-13']);
+  assert.deepStrictEqual(s.days.map(d => d.date), ['2026-11-09', '2026-11-10', '2026-11-11', '2026-11-12', '2026-11-15']);
   assert.strictEqual(s.roster.length, 3, 'inactive student hidden');
   assert.ok(!JSON.stringify(s).includes('@'), 'no emails in public schedule');
   assert.strictEqual(s.serverTime, '2026-11-09T08:05:00+03:00');
 });
 
-check('window skips the weekend when today is Friday', () => {
+check('window skips the Fri–Sat weekend', () => {
   const saved = fakeNowMs;
-  fakeNowMs = Date.parse('2026-11-13T10:00:00+03:00');
-  assert.deepStrictEqual(get().days.map(d => d.date), ['2026-11-13', '2026-11-16', '2026-11-17', '2026-11-18', '2026-11-19']);
+  fakeNowMs = Date.parse('2026-11-12T10:00:00+03:00');   // Thursday
+  assert.deepStrictEqual(get().days.map(d => d.date), ['2026-11-12', '2026-11-15', '2026-11-16', '2026-11-17', '2026-11-18']);
+  fakeNowMs = Date.parse('2026-11-13T10:00:00+03:00');   // Friday: today excluded
+  assert.strictEqual(get().days[0].date, '2026-11-15');
   fakeNowMs = Date.parse('2026-11-14T10:00:00+03:00');   // Saturday: today excluded
-  assert.strictEqual(get().days[0].date, '2026-11-16');
+  assert.strictEqual(get().days[0].date, '2026-11-15');
   fakeNowMs = saved;
 });
 
@@ -198,6 +200,7 @@ check('slot just taken / one booking per day / class code / block / roster / win
   assert.strictEqual(book('rT4', '2026-11-10', 'A', 5).error, 'not_on_roster');
   assert.strictEqual(book('rZZ', '2026-11-10', 'A', 5).error, 'not_on_roster');
   assert.strictEqual(book('rT2', '2026-11-16', 'A', 5).error, 'not_in_window');
+  assert.strictEqual(book('rT2', '2026-11-13', 'A', 5).error, 'not_in_window', 'Friday is not a school day');
   assert.strictEqual(book('rT2', '2026-11-10', 'A', 9).error, 'bad_request');
 });
 
@@ -224,23 +227,23 @@ check('blocked at every granularity (date, date+class, date+class+slot) and prec
   bl.getRange(2, 1, 3, 4).setValues([
     ['2026-11-11', '', '', 'assembly'],
     ['2026-11-12', 'A', '', 'field trip'],
-    ['2026-11-13', 'A', 2, 'maintenance']]);
+    ['2026-11-15', 'A', 2, 'maintenance']]);
   assert.strictEqual(book('rT2', '2026-11-11', 'A', 4).error, 'blocked');
   assert.strictEqual(book('rT3', '2026-11-11', 'B', 4).error, 'blocked');
   assert.strictEqual(book('rT2', '2026-11-12', 'A', 4).error, 'blocked');
-  assert.strictEqual(book('rT2', '2026-11-13', 'A', 2).error, 'blocked');
+  assert.strictEqual(book('rT2', '2026-11-15', 'A', 2).error, 'blocked');
   assert.strictEqual(book('rT3', '2026-11-12', 'B', 4).ok, true, 'other block same date still open');
-  assert.strictEqual(book('rT2', '2026-11-13', 'A', 3).ok, true, 'other slot same block still open');
+  assert.strictEqual(book('rT2', '2026-11-15', 'A', 3).ok, true, 'other slot same block still open');
   const s = get();
   const d11 = s.days.find(d => d.date === '2026-11-11');
   assert.strictEqual(d11.blocked, true);
   assert.strictEqual(slotOf(s, '2026-11-11', 'A', 1).status, 'blocked', 'blocked wins over a booked row');
   assert.strictEqual(s.days.find(d => d.date === '2026-11-12').classes[0].blocked, true);
-  assert.strictEqual(slotOf(s, '2026-11-13', 'A', 2).status, 'blocked');
+  assert.strictEqual(slotOf(s, '2026-11-15', 'A', 2).status, 'blocked');
 });
 
 check('email failure still books, with emailSent:false', () => {
-  const r = book('rT3', '2026-11-13', 'B', 1);
+  const r = book('rT3', '2026-11-15', 'B', 1);
   assert.strictEqual(r.ok, true);
   assert.strictEqual(r.emailSent, false);
 });

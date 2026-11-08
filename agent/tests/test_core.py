@@ -7,7 +7,9 @@ import core
 from core import (DORMANT, IN_SESSION, LOCKED, RESERVED, TEACHER, Block, tick)
 
 MON = "2026-11-09"          # a Monday
+FRI = "2026-11-13"
 SAT = "2026-11-14"
+SUN = "2026-11-15"
 
 
 def at(hhmm: str, d: str = MON, sec: int = 0) -> datetime:
@@ -79,13 +81,16 @@ class SlotMath(unittest.TestCase):
         self.assertEqual(core.active_block(at("14:34", sec=59)).cls, "B")
         self.assertIsNone(core.active_block(at("14:35")))
 
-    def test_weekend_dormant(self):
-        self.assertIsNone(core.active_block(at("08:00", SAT)))
-        self.assertEqual(tick(at("08:00", SAT), None, None).view.mode, DORMANT)
+    def test_fri_sat_weekend_dormant_sunday_is_a_school_day(self):
+        for d in (FRI, SAT):
+            self.assertIsNone(core.active_block(at("08:00", d)))
+            self.assertEqual(tick(at("08:00", d), None, None).view.mode, DORMANT)
+        self.assertEqual(core.active_block(at("08:00", SUN)).cls, "A")
+        self.assertEqual(tick(at("13:10", SUN), None, None).view.mode, LOCKED)
 
     def test_next_armed_start(self):
         self.assertEqual(core.next_armed_start(at("10:00")), at("12:55"))
-        self.assertEqual(core.next_armed_start(at("15:00", "2026-11-13")), at("07:25", "2026-11-16"))
+        self.assertEqual(core.next_armed_start(at("15:00", "2026-11-12")), at("07:25", SUN))   # Thu → Sun
 
 
 class TestWindows(unittest.TestCase):
