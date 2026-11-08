@@ -6,7 +6,8 @@
  *
  * Web app routes (one deployment, updated in place — the /exec URL never changes):
  *   GET  ?action=schedule                          → week grid + active roster (public)
- *   POST {action:"book",   rosterId,date,class,slot,classCode}
+ *   POST {action:"book",   rosterId,date,class,slot,classCode}   (classCode checked only when
+ *        Config.requireClassCode is ticked; the schedule reports it as classCodeRequired)
  *   POST {action:"cancel", token, confirm:false|true}   (confirm:false = preview only)
  *   POST {action:"events", agentKey, events:[...]}       (kiosk agent only)
  * POST bodies are sent as text/plain JSON (no CORS preflight). Every response is JSON.
@@ -44,7 +45,7 @@ var TABS = {
   Bookings: ['id', 'date', 'class', 'slot', 'rosterId', 'displayName', 'status', 'cancelToken', 'createdAt'],
   Blocked:  ['date', 'class', 'slot', 'reason'],
   Log:      ['eventId', 'timestamp', 'event', 'rosterId', 'date', 'class', 'slot', 'minutes'],
-  Config:   ['classCode', 'agentKey']
+  Config:   ['classCode', 'agentKey', 'requireClassCode']
 };
 /** 1-based column of the date column in each tab that has one (formatted Plain text). */
 var DATE_COL = { Bookings: 2, Blocked: 1, Log: 5 };
@@ -339,9 +340,10 @@ function loadBlocked_(ss) {
   };
 }
 
+/** requireClassCode: ticked/TRUE → booking needs the class code; blank/FALSE → it doesn't. */
 function loadConfig_(ss) {
   var r = rows_(ss, 'Config')[0] || [];
-  return { classCode: str_(r[0]), agentKey: str_(r[1]) };
+  return { classCode: str_(r[0]), agentKey: str_(r[1]), requireClassCode: truthy_(r[2]) };
 }
 
 function slotKey_(date, cls, slot) { return date + '|' + cls + '|' + slot; }
@@ -398,6 +400,7 @@ function buildSchedule_(ss) {
     ok: true,
     serverTime: np.iso,
     serverEpochMs: np.epochMs,
+    classCodeRequired: loadConfig_(ss).requireClassCode,
     roster: roster.map(function (s) { return { rosterId: s.rosterId, displayName: s.displayName, 'class': s.cls }; }),
     days: days
   };
@@ -427,7 +430,8 @@ function handleBook_(ss, body) {
     loadRoster_(ss).forEach(function (s) { if (s.rosterId === rosterId && s.active) student = s; });
 
     if (!student) return { ok: false, error: 'not_on_roster' };
-    if (!cfg.classCode || code.toLowerCase() !== cfg.classCode.toLowerCase()) return { ok: false, error: 'bad_code' };
+    if (cfg.requireClassCode &&
+        (!cfg.classCode || code.toLowerCase() !== cfg.classCode.toLowerCase())) return { ok: false, error: 'bad_code' };
     if (student.cls !== cls) return { ok: false, error: 'wrong_block' };
     if (windowDates_(np.date).indexOf(date) < 0) return { ok: false, error: 'not_in_window' };
     if (loadBlocked_(ss).slot(date, cls, slot)) return { ok: false, error: 'blocked' };
@@ -672,6 +676,7 @@ function setup() {
   cfg.getRange(2, 1, 1, 2).setNumberFormat('@');
   if (!str_(cfg.getRange(2, 1).getValue())) cfg.getRange(2, 1).setValue(randomCode_(6));
   if (!str_(cfg.getRange(2, 2).getValue())) cfg.getRange(2, 2).setValue(Utilities.getUuid().replace(/-/g, ''));
+  if (!str_(cfg.getRange(2, 3).getValue())) cfg.getRange(2, 3).insertCheckboxes();   // unticked = no code asked
 
   var first = ss.getSheetByName('Sheet1');
   if (first && first.getLastRow() === 0 && ss.getSheets().length > 1) ss.deleteSheet(first);
@@ -682,7 +687,8 @@ function setup() {
     (scriptTz === SCHOOL_TZ ? 'Script timezone matches (' + scriptTz + ').'
       : 'WARNING: the Apps Script project timezone is ' + scriptTz + ' — set "timeZone": "' + SCHOOL_TZ +
         '" in appsscript.json (Project Settings → Show "appsscript.json"), then run setup() again.') +
-    '\n\nConfig has a classCode and agentKey (edit them any time). Next: fill the Roster tab.';
+    '\n\nConfig has a classCode and agentKey (edit them any time). Tick requireClassCode to make students ' +
+    'type the class code when booking (unticked = not asked). Next: fill the Roster tab.';
   console.log(msg);
   try { SpreadsheetApp.getUi().alert(msg); } catch (noUi) { /* run from editor without a Sheet UI */ }
 }

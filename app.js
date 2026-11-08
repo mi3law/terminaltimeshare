@@ -41,10 +41,12 @@ let lastGoodAt = null;        // Date (device clock) of last good fetch, for the
 let lastError = false;
 let pollTimer = null;
 let inFlight = false;
-let pending = null;           // {date, cls, slot, start} being booked
+let pending = null;           // {date, cls, slot, start, needCode} being booked
 
 const $ = (id) => document.getElementById(id);
 const configured = () => /^https:\/\//.test(EXEC_URL);
+// Teacher's switch (Config.requireClassCode). A backend too old to send it still requires the code.
+const codeRequired = () => !schedule || schedule.classCodeRequired !== false;
 
 // ---------------------------------------------------------------- network ---
 
@@ -216,7 +218,7 @@ function safeSet(k, v) { try { localStorage.setItem(k, v); } catch (e) { /* priv
 // ---------------------------------------------------------------- booking ---
 
 function openBooking(date, cls, slot) {
-  pending = { date, cls, slot: slot.i, start: slot.start };
+  pending = { date, cls, slot: slot.i, start: slot.start, needCode: codeRequired() };
   $('book-title').textContent = `Book ${cls}${slot.i} · ${prettyDate(date)} · ${prettyTime(slot.start)}`;
   const sel = $('book-name');
   sel.textContent = '';
@@ -225,10 +227,16 @@ function openBooking(date, cls, slot) {
   sel.appendChild(new Option('Choose your name…', ''));
   const myName = safeGet(LS_NAME);
   for (const p of people) sel.appendChild(new Option(p.displayName, p.rosterId, false, p.displayName === myName));
+  showCodeField(pending.needCode);
   $('book-code').value = safeGet(LS_CODE);
   setBookError('');
   $('book-submit').disabled = false;
   $('book-dialog').showModal();
+}
+
+function showCodeField(show) {
+  $('book-code-field').hidden = !show;
+  $('book-code').required = show;
 }
 
 function setBookError(msg) {
@@ -240,19 +248,24 @@ function setBookError(msg) {
 async function submitBooking(ev) {
   ev.preventDefault();
   const rosterId = $('book-name').value;
-  const classCode = $('book-code').value.trim();
+  const classCode = pending.needCode ? $('book-code').value.trim() : '';
   if (!rosterId) return setBookError('Pick your name.');
-  if (!classCode) return setBookError('Enter the class code posted in the room.');
+  if (pending.needCode && !classCode) return setBookError('Enter the class code posted in the room.');
   $('book-submit').disabled = true;
   setBookError('');
   const res = await api('POST', { action: 'book', rosterId, date: pending.date, class: pending.cls, slot: pending.slot, classCode });
   $('book-submit').disabled = false;
   if (!res.ok) {
+    if (res.error === 'bad_code' && !pending.needCode) {   // teacher switched the code on while this was open
+      pending.needCode = true;
+      showCodeField(true);
+      return setBookError('Enter the class code posted in the room.');
+    }
     setBookError(BOOK_ERRORS[res.error] || BOOK_ERRORS.unreachable);
     if (res.error === 'slot_taken' || res.error === 'blocked' || res.error === 'past') refresh();
     return;
   }
-  safeSet(LS_CODE, classCode);
+  if (pending.needCode) safeSet(LS_CODE, classCode);
   safeSet(LS_NAME, res.displayName || $('book-name').selectedOptions[0].textContent);
   $('book-dialog').close();
   const what = `${pending.cls}${pending.slot} · ${prettyDate(pending.date)} · ${prettyTime(pending.start)}`;

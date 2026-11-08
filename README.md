@@ -66,7 +66,7 @@ Delete the hello-world project afterwards.
    - creates the tabs **Roster, Bookings, Blocked, Log, Config** with the exact column headers,
    - formats every date column as **Plain text** (so Google Sheets can't turn `2026-11-09` into a date and break comparisons),
    - sets the Sheet's timezone to `SCHOOL_TZ` and warns you if the script timezone differs,
-   - fills **Config** with a random `classCode` and `agentKey` if they're empty.
+   - fills **Config** with a random `classCode` and `agentKey` if they're empty, and adds an unticked `requireClassCode` checkbox (students aren't asked for the code until you tick it).
 
    It is safe to run again; it never deletes data.
 6. Reload the Sheet. A **Timeshare** menu appears (Cancel selected booking + email student · Block a date… · Cancel all bookings for a date…).
@@ -86,7 +86,11 @@ Delete the hello-world project afterwards.
 - `active` is `TRUE` to show the student; set it to `FALSE` to hide them without deleting history.
 - Full names and emails never leave the Sheet.
 
-**Config** has row 2 = `classCode`, `agentKey`. Change `classCode` to something easy to post on the wall. Leave `agentKey` as the random value; you'll copy it into the laptop's `config.json`.
+**Config** has row 2 = `classCode`, `agentKey`, `requireClassCode`. Leave `agentKey` as the random value; you'll copy it into the laptop's `config.json`.
+
+- `requireClassCode` is **unticked by default**: the booking page doesn't ask for a code, and anyone with the page URL can book as any student on the roster. Tick it to make students type `classCode` when they book. It takes effect right away (open booking pages pick it up within about a minute), and `classCode` keeps its value while it's off.
+- If you turn it on, change `classCode` to something easy to post on the wall.
+- A Sheet set up before this column existed has no `requireClassCode` cell. Blank counts as off. To get the checkbox, run `setup()` again.
 
 ### 2.3 Deploy once
 
@@ -219,7 +223,7 @@ While nobody is booking yet, delete the test rows from **Bookings**, **Blocked**
    The URL is public by design; anyone can already read the schedule.
 3. In the repo, go to **Settings → Pages**: *Source: Deploy from a branch*, *Branch: `main`*, folder `/ (root)`. Save.
 4. After a minute the page is live at `https://YOUR-GITHUB-USERNAME.github.io/terminaltimeshare/`. This must match `SPA_URL` in `Code.gs`. If it doesn't, fix `SPA_URL` and redeploy a **new version** (§2.3).
-5. Post the page URL and the class code next to the machine.
+5. Post the page URL next to the machine (plus the class code, if you've ticked `requireClassCode`).
 
 Check it on a phone. The grid shows the next 5 school days; book a test slot with a test student, cancel it from the email link, and confirm "Booked, but the email didn't send" never appears.
 
@@ -326,7 +330,8 @@ Clean up the test rows afterwards (§3.6).
 | Cancel one booking | Select its row in Bookings → **Timeshare → Cancel selected booking + email student**. |
 | Day off / substitute / no-AI day | **Timeshare → Block a date…** (blank class = whole day). It lists that date's bookings and offers to cancel and email them all in one step. Blocking never silently cancels. The kiosk stays dormant on a blocked day. |
 | Block one block or one slot | Same menu, with a class letter (and optionally a slot number 1–6). |
-| Class code leaked / fake bookings | Change `classCode` in **Config**, then **Timeshare → Cancel all bookings for a date…** (optional rosterId and "created after" filters; it emails each affected student). |
+| Turn the class code on or off | Tick or untick `requireClassCode` in **Config**. Open booking pages pick it up within about a minute. |
+| Fake bookings / class code leaked | Tick `requireClassCode` in **Config** if it's off, or change `classCode` if it's on. Then **Timeshare → Cancel all bookings for a date…** (optional rosterId and "created after" filters; it emails each affected student). |
 | Who used it? | The **Log** tab: sessions, minutes, no-shows, walk-ups. Read it as *supervised trust*: the machine doesn't verify who is at the keyboard. |
 
 ### Rotating secrets

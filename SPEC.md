@@ -4,7 +4,7 @@ Booking and automatic timekeeping for one shared AI-coding workstation ("the AI 
 
 **Design goals:** minimal, zero-cost, casual-proof (not tamper-proof), teacher-operable from a Google Sheet.
 
-*Rev 1.3 — school week is Sunday–Thursday (see §12). Rev 1.2 — incorporates a seven-lens adversarial design review (40 findings folded in) plus a requirements-coverage audit (all original requirements and agreed decisions verified covered) and a final author consistency pass.*
+*Rev 1.5 — class code is a switch, off by default (see §12). Rev 1.3 — school week is Sunday–Thursday (see §12). Rev 1.2 — incorporates a seven-lens adversarial design review (40 findings folded in) plus a requirements-coverage audit (all original requirements and agreed decisions verified covered) and a final author consistency pass.*
 
 ## 1. Architecture — three components
 
@@ -30,7 +30,7 @@ The Sheet **is** the admin console: roster, force-cancels, blocked days, config,
 ## 3. Identity and secrets
 
 - Each student is a **rosterId + display name** ("Maya R.") client-side. **rosterId is an opaque value minted for this system** (`r01`…`r24` or short random strings) — never a school-issued student ID, never an email prefix. Full names and emails exist only in the Sheet. Teacher de-duplicates display-name collisions by hand ("Maya Ro.").
-- **Class code:** one shared code (Config tab), posted in the room next to the SPA's URL, required to book, rotatable any time by editing the Sheet. Known to all students by design.
+- **Class code:** one shared code (Config tab), posted in the room next to the SPA's URL, rotatable any time by editing the Sheet. Known to all students by design. **Required to book only while `requireClassCode` is ticked in Config; unticked (the default) means the booking page doesn't ask for it and the backend doesn't check it.** The code value is kept either way, so switching it back on is one tick.
 - **Teacher passcode:** lives only in the agent's local `config.json` on the laptop. Unlocks/overrides the kiosk any time. Entry field is always masked (the screen may be projected).
 - **agentKey:** random shared secret in Config tab + agent `config.json`; authenticates the agent's event POSTs so random internet traffic can't write to the log.
 - **cancelToken:** random UUID per booking, included only in the confirmation email.
@@ -41,7 +41,7 @@ The Sheet **is** the admin console: roster, force-cancels, blocked days, config,
 - Public URL, mobile-friendly, no sign-in to view. `const EXEC_URL` at the top of `app.js` (public by design).
 - **House rules blurb** rendered above the grid, one line per rule: 1 booking/day · your own block only · arrive within 5 min or your slot releases · walk-ups free whenever the machine shows LOCKED · cancel from your confirmation email.
 - **Grid:** next 5 school days × both blocks × 6 slots. Cell states: `Open` / `Booked — Maya R.` / `Mine` (via localStorage name, cosmetic only) / `Blocked` / `Past` (ended slots show no name — see §5 privacy rule). A started *current* slot whose booking reached a terminal state (no-show release, teacher force-end) renders as `Released` — claimable as a walk-up at the machine, never bookable online.
-- **Booking flow:** tap an open slot → pick your name (dropdown filtered to that block's class) → enter class code → Book → confirmation banner + "check your email." If the backend reports the email failed to send, the banner says: *"Booked, but the email didn't send — ask your teacher if you need to cancel."*
+- **Booking flow:** tap an open slot → pick your name (dropdown filtered to that block's class) → enter class code (only shown while it's required) → Book → confirmation banner + "check your email." If the backend reports the email failed to send, the banner says: *"Booked, but the email didn't send — ask your teacher if you need to cancel."*
 - **Cancel flow:** email link opens SPA with `?cancel=TOKEN` → shows the booking → Confirm → cancelled, slot reopens. Cancel error states rendered inline: link invalid · already cancelled · slot already started ("a no-show releases it automatically — see your teacher if needed").
 - One `schedule` fetch on page load (it includes the roster, §5), then polls every 60 s **with ±10 s jitter** and on tab focus. On any non-JSON or error response, keep rendering the last good grid with its "last updated" stamp and retry next tick — never blank the page.
 - **Booking error states shown inline:** slot just taken · you already have a booking that day · wrong class code · name not in this block · backend busy, try again · backend unreachable ("show your teacher this message").
@@ -57,7 +57,7 @@ The Sheet **is** the admin console: roster, force-cancels, blocked days, config,
 | Bookings | id, date, class, slot, rosterId, displayName, status (`booked/done/no-show/cancelled`), cancelToken, createdAt |
 | Blocked | date, class (optional), slot (optional), reason |
 | Log | eventId, timestamp, event, rosterId, date, class, slot, minutes |
-| Config | classCode, agentKey |
+| Config | classCode, agentKey, requireClassCode (checkbox) |
 
 **Status transitions (hard rule):** `booked → done | no-show | cancelled`, nothing else. `done`, `no-show`, and `cancelled` are terminal — an event targeting a row in a terminal state appends to the Log but never rewrites status. A `booked` row left behind on a past date is inert by design (the 1/day rule is keyed to the date; the Log is the fairness record).
 
@@ -67,8 +67,8 @@ The Sheet **is** the admin console: roster, force-cancels, blocked days, config,
 
 | Call | Action | Returns / does |
 |---|---|---|
-| GET | `schedule` | `{serverTime, roster:[{rosterId, displayName, class}], days:[{date, blocked, classes:[{class, blocked, slots:[{i, start, status, displayName?}]}]}]}`. **Privacy rule:** slots whose end time is before serverTime return `status: "past"` with no displayName (the Sheet keeps the real status); the current in-progress slot keeps its real status and name. |
-| POST | `book` | Validates under the script lock: active rosterId · class code · student's class matches block · date in window + school day · **no Blocked row matches at any granularity (date, date+class, or date+class+slot)** · slot start in future · slot free · no booking that date for that student → writes row, then sends email **after releasing the lock** |
+| GET | `schedule` | `{serverTime, classCodeRequired, roster:[{rosterId, displayName, class}], days:[{date, blocked, classes:[{class, blocked, slots:[{i, start, status, displayName?}]}]}]}`. **Privacy rule:** slots whose end time is before serverTime return `status: "past"` with no displayName (the Sheet keeps the real status); the current in-progress slot keeps its real status and name. |
+| POST | `book` | Validates under the script lock: active rosterId · class code (only if `requireClassCode`) · student's class matches block · date in window + school day · **no Blocked row matches at any granularity (date, date+class, or date+class+slot)** · slot start in future · slot free · no booking that date for that student → writes row, then sends email **after releasing the lock** |
 | POST | `cancel` | Token lookup; row must be `booked` **and the slot's start time must be in the future** → marks cancelled, sends cancel-confirmation email |
 | POST | `events` | Requires agentKey. Body: `{agentKey, events:[{eventId, type, date, class, slot, rosterId?, minutes?, ts}]}`. Idempotent by eventId: an eventId already in the Log is silently acked. Appends Log rows; resolves (date, class, slot) to the booking row and applies the status transition table (`session_end → done`, `no_show → no-show`); walk-up events write to the Log only |
 
@@ -134,7 +134,7 @@ Python 3.11+ (python.org installer, tcl/tk component checked), stdlib only (`tki
 ## 8. Accepted residual risks
 
 - A determined student can kill the overlay via Ctrl-Alt-Del / Task Manager — visible, supervised, accepted. **Doing so also exposes `config.json` (passcode + agentKey)**; both rotate cheaply (local file edit + Config tab), and the Log is supervised-trust anyway. The Win-key Start menu can flash over the overlay before the watchdog self-heals.
-- **Anyone with the class code — not just classmates — can book as any student, which also sends that student a confirmation email.** The code is posted on a classroom wall (photographable). Bookings are visible on the public grid; the 1/day cap bounds the rate; rotation + "Cancel all bookings for a date…" is the recovery. Accepted for v1.
+- **Anyone with the class code — not just classmates — can book as any student, which also sends that student a confirmation email.** The code is posted on a classroom wall (photographable). Bookings are visible on the public grid; the 1/day cap bounds the rate; rotation + "Cancel all bookings for a date…" is the recovery. Accepted for v1. **With `requireClassCode` off (the default since rev 1.5), the same applies to anyone who has the page URL**; the recovery adds "tick `requireClassCode`".
 - Public endpoints expose the schedule, the active-student roster (display names, opaque ids, class letter), and booked display names — by design; no emails, no full names, and ended slots hide name + outcome (§5 privacy rule).
 - Walk-up claims and "Start my session" take no identity at the machine: the Log reflects whoever was at the keyboard.
 - The teacher's claude.ai account is reachable on the kiosk outside the terminal app (v2: separate browser profile / restrictions).
@@ -146,7 +146,7 @@ Google Calendar holiday sync (auto-block non-meeting days) · per-student worksp
 ## 10. Setup & deployment
 
 1. **Platform gate (before any real code):** from the intended Google account, deploy a hello-world web app execute-as-me / access-anyone and curl it from a logged-out shell. If the school Workspace tenant blocks "anyone" access, host the Sheet + script on the teacher's personal Google account instead — same code, emails come from gmail.com, 100-recipient/day quota still ≈4× the ceiling here.
-2. **Backend:** create the Sheet; run `setup()` in Apps Script to create tabs, exact column headers, and plain-text date-column formats; set script + Sheet timezone to the school's zone; fill Roster (mint `r01…` ids) and Config (classCode, random agentKey); deploy once; record the `/exec` URL.
+2. **Backend:** create the Sheet; run `setup()` in Apps Script to create tabs, exact column headers, and plain-text date-column formats; set script + Sheet timezone to the school's zone; fill Roster (mint `r01…` ids) and Config (classCode, random agentKey, requireClassCode unticked); deploy once; record the `/exec` URL.
 3. **SPA:** set `EXEC_URL` in `app.js`; push to GitHub Pages.
 4. **Agent:** clone repo to `C:\kiosk`; copy `config.example.json` → `config.json` and fill execUrl/agentKey/passcode; install Python 3.11+ (tcl/tk checked); put a shortcut to `watchdog.cmd` in the Startup folder. Update = `git pull` (config.json untouched).
 5. First run inside an armed window with no cache yet: LOCKED + OFFLINE badge, walk-up-only, until the first successful poll.
@@ -170,6 +170,7 @@ Google Calendar holiday sync (auto-block non-meeting days) · per-student worksp
 - Per-student workspaces deferred to v2 (students already use their own folders under `C:\students\caps\dev\`).
 - Rate limits: non-issue in practice (high-tier plan, two weeks of real use).
 - Rev 1.1: all seven review lenses' findings accepted and folded in (walk-up race, Sheets date coercion, Win+D recovery, watchdog fail-closed, teacher-mode status transitions, cache date-validity, blocked precedence, event idempotency + sync badges, privacy tightenings, setup/test-mode sections added).
+- Rev 1.5 (owner's call): the class code is **off by default**. The roster is one class and the code was shared, not per student, so it added a step without telling students apart. It stays built in behind the Config checkbox `requireClassCode` (ticked = the page asks for it and `book` checks it; blank/unticked = neither). A blank cell counts as off, so a Sheet set up before rev 1.5 needs no edits. `schedule` reports the switch as `classCodeRequired`; a booking page talking to an older backend that doesn't send it keeps asking for the code.
 - Rev 1.4 (during setup, owner's call): the booking page is branded **"CAPS AI Terminal Booking"** in the school's colours with its globe logo (matching the teacher's other school tool), relaxing the §3 "no school/class name" rule for the page's branding only. Student data, full names, emails and secrets stay out of the repo as before. Email sender name is set per-deployment via `MAIL_NAME` in the pasted `Code.gs`.
 - Rev 1.3 (during setup): the school week is **Sunday–Thursday**, not Mon–Fri. "Weekday" everywhere means a Sun–Thu school day: `SCHOOL_DAYS` in `backend/Code.gs` and `SCHOOL_WEEKDAYS` in `agent/core.py` (kept in sync).
 - Rev 1.2: requirements-coverage audit passed (all 15 requirements/decisions satisfied, zero holes); final consistency pass added the `Released` grid state, the minimized watchdog shortcut, and the duplicate-instance exit-code rule.

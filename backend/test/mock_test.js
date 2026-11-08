@@ -67,6 +67,10 @@ class Range {
     return this;
   }
   setFontWeight() { return this; }
+  insertCheckboxes() {   // like Sheets: every cell becomes an unticked checkbox (value false)
+    for (let i = 0; i < this.nr; i++) for (let j = 0; j < this.nc; j++) this.sh.set(this.r + i, this.c + j, false);
+    return this;
+  }
   getRow() { return this.r; }
 }
 class Sheet {
@@ -143,7 +147,14 @@ check('setup creates exact headers and timezone', () => {
   assert.strictEqual(ss.tz, TZ);
   assert.ok(!ss.getSheetByName('Sheet1'));
   assert.ok(CODE && KEY);
+  assert.deepStrictEqual(ss.getSheetByName('Config').getRange(1, 1, 1, 3).getValues()[0],
+    ['classCode', 'agentKey', 'requireClassCode']);
+  assert.strictEqual(ss.getSheetByName('Config').getRange(2, 3).getValue(), false, 'class code off by default');
+  assert.strictEqual(get().classCodeRequired, false);
 });
+
+const setRequireCode = v => ss.getSheetByName('Config').getRange(2, 3).setValue(v);
+setRequireCode(true);   // the checks below run with the class code required; the off switch is tested at the end
 
 check('schedule window = next 5 Sun–Thu school days from Monday', () => {
   const s = get();
@@ -332,6 +343,28 @@ check('teacher cancelByIds_ only touches booked rows', () => {
   assert.strictEqual(res.cancelled, 1);
   assert.strictEqual(statusOf('b-hand'), 'no-show');
   assert.strictEqual(statusOf('b-started'), 'cancelled');
+});
+
+check('requireClassCode switch: on demands the code, off ignores it, the code itself is kept', () => {
+  setRequireCode(true);
+  assert.strictEqual(get().classCodeRequired, true);
+  assert.strictEqual(book('rT2', '2026-11-10', 'A', 5, '').error, 'bad_code', 'missing code rejected when on');
+  setRequireCode('');   // a blank cell (e.g. a live Sheet set up before this column existed) counts as off
+  assert.strictEqual(get().classCodeRequired, false);
+  const r = book('rT2', '2026-11-10', 'A', 5, '');
+  assert.strictEqual(r.ok, true, JSON.stringify(r));
+  setRequireCode(false);
+  assert.strictEqual(book('rT1', '2026-11-15', 'A', 5, 'wrong').ok, true, 'any code accepted when off');
+  setRequireCode('TRUE');   // typed text works as well as a ticked checkbox
+  assert.strictEqual(get().classCodeRequired, true);
+  assert.strictEqual(book('rT3', '2026-11-10', 'B', 5, 'wrong').error, 'bad_code');
+  assert.strictEqual(ss.getSheetByName('Config').getRange(2, 1).getValue(), CODE, 'class code untouched');
+});
+
+check('re-running setup() never resets the requireClassCode switch', () => {
+  setRequireCode(true);
+  ctx.setup();
+  assert.strictEqual(ss.getSheetByName('Config').getRange(2, 3).getValue(), true);
 });
 
 console.log(`\n${pass} backend mock checks passed`);

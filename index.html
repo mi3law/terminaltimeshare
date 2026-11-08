@@ -38,8 +38,10 @@
       <h2 id="book-title">Book a slot</h2>
       <label for="book-name">Your name</label>
       <select id="book-name" required></select>
-      <label for="book-code">Class code</label>
-      <input id="book-code" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" required>
+      <div id="book-code-field">
+        <label for="book-code">Class code</label>
+        <input id="book-code" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" required>
+      </div>
       <p id="book-error" class="error" role="alert" hidden></p>
       <div class="actions">
         <button type="button" id="book-cancel" class="secondary">Back</button>
