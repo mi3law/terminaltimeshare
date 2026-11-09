@@ -11,3 +11,6 @@ __pycache__/
 *.pyc
 .DS_Store
 Thumbs.db
+
+# Backend deploy (backend/deploy.js): the Apps Script project id stays on the deploying machine
+backend/script-id.txt

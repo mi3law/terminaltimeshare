@@ -102,6 +102,8 @@ Delete the hello-world project afterwards.
 2. Copy the **Web app URL** (`https://script.google.com/macros/s/…/exec`). This is your **EXEC URL**; you'll paste it in two places (`app.js` and the laptop's `config.json`).
 
 > **Updating the code later:** paste the new `Code.gs`, then **Deploy → Manage deployments → ✏️ (edit) → Version: New version → Deploy**. **Never** click *New deployment* again: that makes a new URL, and the booking page and kiosk would keep calling the old one. Saving the code alone does not change what the web app runs.
+>
+> Or do both steps with one command from a computer with the repo: `node backend/deploy.js` (one-time setup in [§8](#8-for-developers)). It keeps your `SCHOOL_TZ`, `SPA_URL` and `MAIL_NAME` from the live copy.
 
 ---
 
@@ -365,7 +367,35 @@ Keep the Sheet and the Apps Script project **private** to your account; never li
 ```bash
 cd agent && python3 -m unittest          # pure scheduling logic (core.py) + store
 node backend/test/mock_test.js           # Code.gs rules against an in-memory fake Sheet (offline)
+node backend/test/deploy_test.js         # backend/deploy.js helpers (offline)
 ```
+
+### Deploying backend changes in one command
+
+`node backend/deploy.js` replaces pasting `Code.gs` and clicking **New version**. It uses Google's [clasp](https://github.com/google/clasp) tool.
+
+**One-time setup** (on the computer you deploy from, signed in to the Google account that owns the Sheet):
+
+1. Install clasp: `npm install -g @google/clasp@3` (needs [Node.js](https://nodejs.org)).
+2. Turn on **Google Apps Script API** at <https://script.google.com/home/usersettings>.
+3. Run `clasp login`. A browser tab opens: sign in with that account and allow access. If your school's Google Workspace blocks this ("app blocked" or "access denied"), keep updating by hand ([§2.3](#23-deploy-once)).
+4. In the Apps Script editor, open **Project Settings** (gear icon) and copy the **Script ID**. Save it as the only line of `backend/script-id.txt`. Git ignores that file.
+5. Check with `node backend/deploy.js --dry-run`. It shows the settings it will keep and the files it would push, and changes nothing.
+
+**Each deploy:** from an up-to-date `main` with `backend/Code.gs` committed, run `node backend/deploy.js`. It:
+
+- refuses to run on any other branch, or with uncommitted changes to `Code.gs`,
+- runs both offline test files, and stops if either fails,
+- downloads the live project, and keeps the `SCHOOL_TZ`, `SPA_URL` and `MAIL_NAME` lines from the live `Code.gs`. Your settings never go in git, so set them in the online editor once,
+- uploads the new `Code.gs` (plus the project's other files, unchanged),
+- moves the deployment in `app.js`'s `EXEC_URL` to a new version, described `git <commit>`. The URL stays the same,
+- checks that the web app answers, and prints how many students it shows.
+
+What it doesn't do:
+
+- **Run functions.** When a change adds Config columns or tabs, run `setup()` once in the editor afterwards.
+- **Keep other online edits.** Any change made in the online editor other than those three lines is overwritten, as a paste would.
+- **Approve new permissions.** If a change starts using a new Google service, open the editor and run any function once to approve it. Until then, the web app returns an authorization error.
 
 - `agent/core.py` holds all kiosk decisions as pure functions: slot math, armed windows, the no-show formula, overtime / just-in-time / 30-second grace, cache date-validity, blocked precedence, teacher mode and badges. `agent/agent.py` is the tkinter shell, the network threads and the Windows shims. It has no scheduling logic of its own.
 - Run the agent on macOS/Linux for development with `cd agent && python3 agent.py`. That defaults to `--windowed` off Windows; Windows-only features (DPI awareness, keep-awake, chimes, multi-monitor blackout) degrade to no-ops. You need a `config.json`, plus a `testWindows` entry to make it arm. You also need a Python build with Tk: the python.org installers have it, Homebrew's `python` needs `brew install python-tk@3.x` for your version.
