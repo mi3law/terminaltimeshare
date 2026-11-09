@@ -38,6 +38,7 @@ import store  # noqa: E402
 
 import tkinter as tk  # noqa: E402  (imported after path setup; core/store stay tkinter-free)
 from tkinter import messagebox  # noqa: E402
+import tkinter.font as tkfont  # noqa: E402
 
 VERSION = "1.0.0"
 CONFIG_PATH = HERE / "config.json"
@@ -60,11 +61,35 @@ PILL_MARGIN = 16                                # default pill spot: this far in
 IS_WIN = sys.platform == "win32"
 FONT = "Segoe UI" if IS_WIN else "Helvetica"
 MONO = "Consolas" if IS_WIN else "Menlo"
-BG, FG, MUTED, ACCENT = "#101317", "#e8eaed", "#9aa3ae", "#14b8a6"
-ORANGE, RED, BADGE = "#d97706", "#dc2626", "#f59e0b"
+# The look follows the school wallpaper: a deep navy vignette, the school-blue seal (#233e82, also the
+# booking page's blue) with a soft glow and a champagne-gold ring, white words. Gold marks what you
+# can act on, as on the booking page.
+NAVY_EDGE, NAVY_MID, GLOW = "#050812", "#0e1631", "#1b2f63"
+SCHOOL_BLUE, RING_GOLD = "#233e82", "#d0b07c"
+GOLD, GOLD_HI, ON_GOLD = "#e2c48c", "#efd7a8", "#0b1633"
+FG, MUTED, DIM = "#f4f6fb", "#a9b7dc", "#6f7ea8"
+TILE, TILE_HI, TILE_PAST, LINE, LINE_DIM = "#111d3f", "#1b2e5e", "#0b1330", "#2b4179", "#1a2850"
+WARN_BG, WARN_FG, BLOCKED_FG = "#3b2d12", "#ffe2a8", "#f3a99b"
+BG, ORANGE, RED, BADGE = NAVY_MID, "#d97706", "#dc2626", WARN_FG       # in-session pill
+BRAND = "CAPS AI Terminal"
+NAMES_PER_PAGE = 20
+
+# Lock-screen type: size in px at 100 % Windows scaling; the first installed family wins (the Mac
+# fallbacks are only for dev previews).
+_LIGHT = (("Segoe UI Light", "normal"), ("Helvetica Neue", "normal"), ("Helvetica", "normal"))
+_TEXT = (("Segoe UI", "normal"), ("Helvetica Neue", "normal"), ("Helvetica", "normal"))
+_SEMI = (("Segoe UI Semibold", "normal"), ("Helvetica Neue", "bold"), ("Helvetica", "bold"))
+TYPE = {"clock": (84, _LIGHT), "caps": (17, _SEMI), "name": (46, _SEMI), "slot": (26, _SEMI),
+        "note": (19, _TEXT), "button": (21, _SEMI), "small_btn": (15, _SEMI), "brand": (20, _SEMI),
+        "badge": (13, _SEMI), "tile_code": (14, _SEMI), "tile_time": (19, _SEMI), "tile_label": (17, _TEXT),
+        "next": (17, _TEXT), "name_tile": (19, _SEMI), "small": (14, _TEXT), "entry": (16, _TEXT),
+        "msg": (15, _TEXT)}
 
 HOUSE_RULES = ("1 booking per day  ·  your own block only  ·  arrive within 5 min or your slot releases  ·  "
-               "walk-ups are free whenever this screen shows LOCKED  ·  cancel from your confirmation email")
+               "walk-ups are free whenever this screen shows OPEN  ·  cancel from your confirmation email")
+# The open screen's headline already says "open for walk-ups", so core's notes are reworded there.
+OPEN_NOTES = {"Open — claim it as a walk-up": "Nobody has booked this slot — no teacher needed",
+              "Released — open for a walk-up": "This slot was released — no teacher needed"}
 
 log = logging.getLogger("kiosk")
 
@@ -385,6 +410,434 @@ def row_label(r: core.SlotRow) -> str:
             "no-show": "Released", "unknown": "?"}.get(r.status, r.name or "Booked")
 
 
+# =============================================================================== lock screen
+
+def ui_scale(root: tk.Misc) -> float:
+    """Design px → screen px: 1.0 at 100 % Windows display scaling, 1.25 at 125 %, …"""
+    try:
+        return max(0.75, root.winfo_fpixels("1i") / 96.0)
+    except tk.TclError:
+        return 1.0
+
+
+def mix(a: str, b: str, t: float) -> str:
+    """The colour t of the way from a to b (both #rrggbb)."""
+    ca, cb = (tuple(int(c[i:i + 2], 16) for i in (1, 3, 5)) for c in (a, b))
+    return "#" + "".join(f"{round(x + (y - x) * t):02x}" for x, y in zip(ca, cb))
+
+
+def spaced(text: str) -> str:
+    """Letter-spaced capitals, like the ring lettering on the school seal."""
+    return " ".join(text.upper())
+
+
+def row_kind(r: core.SlotRow) -> str:
+    if r.status in ("open", "blocked", "past", "unknown"):
+        return r.status
+    return "released" if r.status in ("released", "done", "no-show") else "booked"
+
+
+class LockScreen:
+    """The LOCKED / RESERVED overlay and the walk-up name picker, drawn on one canvas.
+
+    render(model) redraws when anything but the clock, the no-show countdown or the passcode
+    message changed (those three update in place). Sizes follow the display scaling and shrink
+    to fit the screen, so nothing is ever cut off."""
+
+    DYNAMIC = ("clock", "countdown", "pass_msg")
+
+    def __init__(self, parent: tk.Toplevel, actions: dict):
+        self.actions = actions          # primary, back, start, prev, next, unlock → fn(); tile → fn(i)
+        cv = self.cv = tk.Canvas(parent, bg=NAVY_EDGE, highlightthickness=0, bd=0)
+        cv.pack(fill="both", expand=True)
+        self.base = ui_scale(parent)
+        self.scale: Optional[float] = None
+        installed = set(tkfont.families(parent))
+        self.fonts: dict = {}
+        for role, (px, choices) in TYPE.items():
+            family, weight = next((c for c in choices if c[0] in installed), choices[-1])
+            self.fonts[role] = tkfont.Font(root=parent, family=family, size=-px, weight=weight)
+        self.entry = tk.Entry(cv, show="•", relief="flat", bd=6, bg=TILE_PAST, fg=FG, insertbackground=FG,
+                              highlightthickness=1, highlightbackground=LINE, highlightcolor=GOLD,
+                              font=self.fonts["entry"])
+        self.entry.bind("<Return>", lambda e: self.actions["unlock"]())
+        self.entry_item = cv.create_window(0, 0, window=self.entry, anchor="e", state="hidden")
+        self.logo_files: dict = {}
+        for p in (HERE / "assets").glob("globe-*.png"):
+            try:
+                self.logo_files[int(p.stem.split("-")[1])] = p
+            except ValueError:
+                pass
+        self.logos: dict = {}
+        self.model: Optional[dict] = None
+        self.static: Optional[dict] = None
+        self.dyn: dict = {}
+        self.size = (0, 0)
+        self.colors: dict = {}          # hot tag → (fill, hover fill)
+        for tag in ("btn", "tile"):
+            cv.tag_bind(tag, "<Enter>", self._enter)
+            cv.tag_bind(tag, "<Leave>", self._leave)
+            cv.tag_bind(tag, "<Button-1>", self._click)
+        cv.tag_bind("tile", "<Double-Button-1>", lambda e: self.actions["start"]())
+        cv.bind("<Configure>", lambda e: self._redraw() if (e.width, e.height) != self.size else None)
+
+    # ------------------------------------------------------------------ public
+
+    def render(self, m: dict) -> None:
+        self.model = m
+        static = {k: v for k, v in m.items() if k not in self.DYNAMIC}
+        static["countdown?"] = m.get("countdown") is not None
+        if static != self.static:
+            self.static = static
+            self._redraw()
+            return
+        for k in self.DYNAMIC:
+            if m.get(k) != self.dyn.get(k):
+                self.cv.itemconfig(f"dyn:{k}", text=m.get(k) or "")
+                self.dyn[k] = m.get(k)
+
+    # ------------------------------------------------------------------ layout
+
+    def _redraw(self) -> None:
+        m, cv = self.model, self.cv
+        W, H = cv.winfo_width(), cv.winfo_height()
+        if m is None or W < 200 or H < 200:
+            return
+        if (W, H) != self.size:
+            self.size = (W, H)
+            self._background(W, H)
+        s = self.base
+        for _ in range(6):                          # shrink until the centre fits between header and footer
+            self._set_scale(s)
+            cv.delete("content")
+            self.colors.clear()
+            top, bottom = self._chrome(m, W, H, s)
+            self._center(m, W, s)
+            x0, y0, x1, y1 = cv.bbox("center")
+            room_w, room_h = W - 64 * s, bottom - top
+            if (y1 - y0 <= room_h and x1 - x0 <= room_w) or s < 0.5 * self.base:
+                break
+            s *= 0.98 * min(room_h / (y1 - y0), room_w / (x1 - x0))
+        cv.move("center", 0, top + max(0.0, (room_h - (y1 - y0)) / 2) - y0)
+        self.dyn = {k: m.get(k) for k in self.DYNAMIC}
+        self._rehover()
+
+    def _set_scale(self, s: float) -> None:
+        if s != self.scale:
+            self.scale = s
+            for role, f in self.fonts.items():
+                f.configure(size=-max(7, round(TYPE[role][0] * s)))
+
+    def _background(self, W: int, H: int) -> None:
+        """The wallpaper's vignette: lighter navy in the middle, near-black at the edges."""
+        cv, cx, cy, steps = self.cv, W / 2, H * 0.45, 40
+        cv.delete("bg")
+        for i in range(steps):
+            t = 1 - i / steps
+            rx, ry = W * 0.75 * t, H * 0.8 * t
+            cv.create_oval(cx - rx, cy - ry, cx + rx, cy + ry, outline="", tags="bg",
+                           fill=mix(NAVY_MID, NAVY_EDGE, t ** 1.5))
+        cv.tag_lower("bg")
+
+    def _chrome(self, m: dict, W: int, H: int, s: float) -> tuple:
+        """Header (globe + name, warning badges) and footer (house rules, teacher passcode).
+        Returns the band (top, bottom) left for the centre."""
+        cv, T, M = self.cv, ("content",), 36 * s
+        logo = self._logo(round(40 * s))
+        head_h = max(self._ls("brand"), logo.height() if logo else 0)
+        mid, x = M + head_h / 2, M
+        if logo:
+            cv.create_image(x, mid, image=logo, anchor="w", tags=T)
+            x += logo.width() + 14 * s
+        cv.create_text(x, mid, text=BRAND, font=self.fonts["brand"], fill=FG, anchor="w", tags=T)
+        x, f = W - M, self.fonts["badge"]
+        for b in reversed(m["badges"]):
+            w, h = f.measure(b) + 28 * s, self._ls("badge") + 12 * s
+            self._rrect(x - w, mid - h / 2, x, mid + h / 2, h / 2, fill=WARN_BG,
+                        outline=mix(WARN_FG, WARN_BG, 0.55), tags=T)
+            cv.create_text(x - w / 2, mid, text=b, font=f, fill=WARN_FG, tags=T)
+            x -= w + 10 * s
+
+        # Teacher passcode: bottom-right, small and out of the students' way.
+        fh, ew = 42 * s, 180 * s
+        fy = H - M - fh / 2
+        ux = self._button(W - M, fy, "Unlock", "unlock", "small", s, T, anchor="e")[0]
+        cv.coords(self.entry_item, ux - 10 * s, fy)
+        cv.itemconfig(self.entry_item, width=round(ew), height=round(fh), state="normal")
+        lx = ux - 10 * s - ew - 12 * s
+        cv.create_text(lx, fy, text="Teacher", font=self.fonts["small"], fill=DIM, anchor="e", tags=T)
+        msg_y = fy - fh / 2 - 8 * s
+        cv.create_text(W - M, msg_y, text=m.get("pass_msg") or "", font=self.fonts["msg"], fill=WARN_FG,
+                       anchor="se", tags=T + ("dyn:pass_msg",))
+        # House rules: bottom-left, wrapped between rules, never under the passcode.
+        room = lx - self.fonts["small"].measure("Teacher") - M - 48 * s
+        rules = self._wrap(HOUSE_RULES.split("  ·  "), "  ·  ", "small", room)
+        cv.create_text(M, H - M, text=rules, font=self.fonts["small"], fill=mix(MUTED, DIM, 0.45), anchor="sw",
+                       justify="left", tags=T)
+        rules_top = H - M - self._ls("small") * (rules.count("\n") + 1)
+        return M + head_h + 24 * s, min(rules_top, msg_y - self._ls("msg")) - 24 * s
+
+    def _center(self, m: dict, W: int, s: float) -> None:
+        T, cx, y = ("content", "center"), W / 2, 0.0
+        if m["picking"]:
+            y = self._text(cx, y, m["clock"], "clock", FG, T + ("dyn:clock",))
+            y = self._caps(cx, y + 4 * s, "Who's using the machine?", T)
+            y = self._text(cx, y + 12 * s, m["slot"], "slot", FG, T)
+            y = self._text(cx, y + 6 * s, "Tap your name, then Start.", "note", MUTED, T)
+            y = self._names(cx, y + 26 * s, m, s, T)
+            names, sel = m["names"], m["sel"]
+            if len(names) > NAMES_PER_PAGE:
+                pages = -(-len(names) // NAMES_PER_PAGE)
+                label = f"Page {m['page'] + 1} of {pages}"
+                prev, nxt = "‹  Previous", "Next  ›"
+                (pw, bh), (nw, _) = self._btn_size(prev, "small", s), self._btn_size(nxt, "small", s)
+                half = self.fonts["note"].measure(label) / 2 + 18 * s
+                y += 18 * s
+                self._button(cx - half - pw / 2, y, prev, "prev", "small", s, T, enabled=m["page"] > 0)
+                self._button(cx + half + nw / 2, y, nxt, "next", "small", s, T, enabled=m["page"] < pages - 1)
+                self.cv.create_text(cx, y + bh / 2, text=label, font=self.fonts["note"], fill=MUTED, tags=T)
+                y += bh
+            start = f"Start as {names[sel]}" if sel is not None else "Start session"
+            (bw1, bh), (bw2, _), gap = self._btn_size("Back", "secondary", s), self._btn_size(start, "primary", s), 16 * s
+            x0, y = cx - (bw1 + gap + bw2) / 2, y + 28 * s
+            self._button(x0 + bw1 / 2, y, "Back", "back", "secondary", s, T)
+            self._button(x0 + bw1 + gap + bw2 / 2, y, start, "start", "primary", s, T, enabled=sel is not None)
+            if m["pick_msg"]:
+                self._text(cx, y + bh + 14 * s, m["pick_msg"], "msg", WARN_FG, T)
+            return
+
+        r, glow = 52 * s, 26 * s
+        self._seal(cx, y + glow + r, r, glow, m["icon"], T)
+        y = self._text(cx, y + 2 * (glow + r) + 4 * s, m["clock"], "clock", FG, T + ("dyn:clock",))
+        y = self._caps(cx, y + 2 * s, m["status"], T)
+        if m["name"]:
+            y = self._text(cx, y + 6 * s, m["name"], "name", FG, T)
+        y = self._text(cx, y + 14 * s, m["slot"], "slot", FG, T)
+        if m["note"]:
+            note = "\n".join(self._wrap(p.split(" "), " ", "note", 760 * s) for p in m["note"].split("\n"))
+            y = self._text(cx, y + 6 * s, note, "note", MUTED, T)
+        if m["countdown"] is not None:
+            y = self._text(cx, y + 6 * s, m["countdown"], "note", MUTED, T + ("dyn:countdown",))
+        if m["primary"]:
+            y = self._button(cx, y + 26 * s, m["primary"], "primary", "primary", s, T)[3]
+        if m["rows"]:
+            y = self._timeline(cx, y + 40 * s, m["rows"], s, T)
+            self._text(cx, y + 16 * s, m["next_up"], "next", MUTED, T)
+
+    # ------------------------------------------------------------------ pieces
+
+    def _seal(self, cx: float, cy: float, r: float, glow: float, icon: str, T: tuple) -> None:
+        """The school seal, simplified: a school-blue disc with a soft glow and a gold ring, and a
+        white padlock (locked), open padlock (open for walk-ups) or person (reserved) inside."""
+        cv, s, steps = self.cv, self.scale, 16
+        for i in range(steps):
+            t, rr = i / steps, r + glow * (1 - i / steps)
+            cv.create_oval(cx - rr, cy - rr, cx + rr, cy + rr, outline="", fill=mix(NAVY_MID, GLOW, t * t), tags=T)
+        cv.create_oval(cx - r, cy - r, cx + r, cy + r, fill=SCHOOL_BLUE, outline="", tags=T)
+        ring = r - 7 * s
+        cv.create_oval(cx - ring, cy - ring, cx + ring, cy + ring, outline=RING_GOLD,
+                       width=max(1, round(1.6 * s)), tags=T)
+        u = r / 52
+        if icon == "person":
+            cv.create_oval(cx - 11 * u, cy - 28 * u, cx + 11 * u, cy - 6 * u, fill=FG, outline="", tags=T)
+            cv.create_arc(cx - 24 * u, cy - u, cx + 24 * u, cy + 47 * u, start=0, extent=180, style="chord",
+                          fill=FG, outline="", tags=T)
+            return
+        lift = 9 * u if icon == "open" else 0                        # open: shackle lifted out of its right hole
+        cy += 3 * u + lift / 2                                       # padlock: shackle, body, keyhole
+        top = cy - 21 * u - lift
+        cv.create_arc(cx - 14 * u, top - 14 * u, cx + 14 * u, top + 14 * u, start=0, extent=180, style="arc",
+                      outline=FG, width=6 * u, tags=T)
+        cv.create_line(cx - 14 * u, top, cx - 14 * u, cy - 4 * u, fill=FG, width=6 * u, tags=T)
+        cv.create_line(cx + 14 * u, top, cx + 14 * u, top + 5 * u if lift else cy - 4 * u, fill=FG, width=6 * u,
+                       tags=T)
+        self._rrect(cx - 23 * u, cy - 6 * u, cx + 23 * u, cy + 27 * u, 6 * u, fill=FG, outline="", tags=T)
+        cv.create_oval(cx - 4.5 * u, cy + 3 * u, cx + 4.5 * u, cy + 12 * u, fill=SCHOOL_BLUE, outline="", tags=T)
+        cv.create_rectangle(cx - 2 * u, cy + 9 * u, cx + 2 * u, cy + 19 * u, fill=SCHOOL_BLUE, outline="", tags=T)
+
+    def _caps(self, cx: float, y: float, text: str, T: tuple) -> float:
+        """Gold letter-spaced capitals between two short gold rules."""
+        f, s, text = self.fonts["caps"], self.scale, spaced(text)
+        ls, half = self._ls("caps"), f.measure(text) / 2
+        self.cv.create_text(cx, y, text=text, font=f, fill=RING_GOLD, anchor="n", tags=T)
+        for sign in (-1, 1):
+            x0 = cx + sign * (half + 18 * s)
+            self.cv.create_line(x0, y + ls / 2, x0 + sign * 56 * s, y + ls / 2, fill=mix(RING_GOLD, NAVY_MID, 0.5),
+                                width=max(1, round(1.2 * s)), tags=T)
+        return y + ls
+
+    def _timeline(self, cx: float, y: float, rows: list, s: float, T: tuple) -> float:
+        """Today's slots in this block as a row of tiles; the current one is school blue, ringed in gold."""
+        cv, n = self.cv, len(rows)
+        w, gap, pad = 172 * s, 12 * s, 16 * s
+        h = 2 * pad + self._ls("tile_code") + self._ls("tile_time") + self._ls("tile_label") + 8 * s
+        x = cx - (n * w + (n - 1) * gap) / 2
+        ink = {"open": GOLD, "booked": FG, "blocked": BLOCKED_FG, "released": MUTED, "past": DIM, "unknown": MUTED}
+        for code, start, label, kind, now in rows:
+            past = kind == "past" and not now
+            fill, edge, lw = ((SCHOOL_BLUE, RING_GOLD, max(1, round(2 * s))) if now else
+                              (TILE_PAST, LINE_DIM, 1) if past else (TILE, LINE, 1))
+            self._rrect(x, y, x + w, y + h, 12 * s, fill=fill, outline=edge, width=lw, tags=T)
+            ty = y + pad
+            cv.create_text(x + pad, ty, text=code, font=self.fonts["tile_code"], anchor="nw", tags=T,
+                           fill=RING_GOLD if now else DIM if past else MUTED)
+            if now:
+                cv.create_text(x + w - pad, ty, text=spaced("now"), font=self.fonts["tile_code"], fill=RING_GOLD,
+                               anchor="ne", tags=T)
+            ty += self._ls("tile_code") + 4 * s
+            cv.create_text(x + pad, ty, text=start, font=self.fonts["tile_time"], fill=DIM if past else FG,
+                           anchor="nw", tags=T)
+            ty += self._ls("tile_time") + 4 * s
+            cv.create_text(x + pad, ty, text=self._fit(label, "tile_label", w - 2 * pad), anchor="nw", tags=T,
+                           font=self.fonts["tile_label"], fill=ink.get(kind, FG))
+            x += w + gap
+        return y + h
+
+    def _names(self, cx: float, y: float, m: dict, s: float, T: tuple) -> float:
+        """The walk-up picker: one tile per name, up to NAMES_PER_PAGE at a time."""
+        names, sel = m["names"], m["sel"]
+        paged = len(names) > NAMES_PER_PAGE
+        first = m["page"] * NAMES_PER_PAGE
+        chunk = names[first:first + NAMES_PER_PAGE]
+        if not chunk:
+            return y
+        rows = 4 if paged else -(-len(chunk) // 5)
+        cols = 5 if paged else -(-len(chunk) // rows)
+        w, h, gap = 226 * s, 58 * s, 12 * s
+        for r in range(rows):                       # a paged grid keeps its height on the last page
+            line = chunk[r * cols:(r + 1) * cols]
+            x = cx - (len(line) * w + (len(line) - 1) * gap) / 2
+            for j, name in enumerate(line):
+                i, tag = first + r * cols + j, f"tile:{first + r * cols + j}"
+                chosen = i == sel
+                fill, hover = (GOLD, GOLD) if chosen else (TILE, TILE_HI)
+                self._rrect(x, y, x + w, y + h, 12 * s, fill=fill, outline="" if chosen else LINE,
+                            width=max(1, round(1.2 * s)), tags=T + ("tile", tag, "face"))
+                self.cv.create_text(x + w / 2, y + h / 2, text=self._fit(name, "name_tile", w - 24 * s),
+                                    font=self.fonts["name_tile"], fill=ON_GOLD if chosen else FG,
+                                    tags=T + ("tile", tag))
+                self.colors[tag] = (fill, hover)
+                x += w + gap
+            y += h + gap
+        return y - gap
+
+    def _btn_size(self, text: str, kind: str, s: float) -> tuple:
+        f = self.fonts["small_btn" if kind == "small" else "button"]
+        pad = {"primary": 34, "secondary": 26, "small": 18}[kind] * s
+        return f.measure(text) + 2 * pad, (42 if kind == "small" else 62) * s
+
+    def _button(self, x: float, y: float, text: str, act: str, kind: str, s: float, T: tuple,
+                anchor: str = "n", enabled: bool = True) -> tuple:
+        """A pill button: primary is gold, secondary/small are outlined. anchor n: (x, y) is its top
+        centre; e: its right middle. Returns its bbox."""
+        w, h = self._btn_size(text, kind, s)
+        x1, y1 = (x - w / 2, y) if anchor == "n" else (x - w, y - h / 2)
+        if not enabled:
+            fill, hover, ink, edge = TILE_PAST, TILE_PAST, DIM, LINE_DIM
+        elif kind == "primary":
+            fill, hover, ink, edge = GOLD, GOLD_HI, ON_GOLD, ""
+        else:
+            fill, hover, ink, edge = TILE, TILE_HI, FG, LINE
+        hot = ("btn", f"act:{act}") if enabled else ()
+        self._rrect(x1, y1, x1 + w, y1 + h, h / 2, fill=fill, outline=edge, width=max(1, round(1.5 * s)),
+                    tags=T + hot + ("face",))
+        self.cv.create_text(x1 + w / 2, y1 + h / 2, text=text, fill=ink, tags=T + hot,
+                            font=self.fonts["small_btn" if kind == "small" else "button"])
+        if enabled:
+            self.colors[f"act:{act}"] = (fill, hover)
+        return x1, y1, x1 + w, y1 + h
+
+    def _text(self, x: float, y: float, text: str, role: str, fill: str, T: tuple) -> float:
+        """Centred text with its top at y; returns the y just below it."""
+        self.cv.create_text(x, y, text=text, font=self.fonts[role], fill=fill, anchor="n", justify="center", tags=T)
+        return y + self._ls(role) * (text.count("\n") + 1)
+
+    def _rrect(self, x1: float, y1: float, x2: float, y2: float, r: float, **kw) -> int:
+        r = min(r, (x2 - x1) / 2, (y2 - y1) / 2)
+        pts = (x1 + r, y1, x1 + r, y1, x2 - r, y1, x2 - r, y1, x2, y1, x2, y1 + r, x2, y1 + r, x2, y2 - r,
+               x2, y2 - r, x2, y2, x2 - r, y2, x2 - r, y2, x1 + r, y2, x1 + r, y2, x1, y2, x1, y2 - r,
+               x1, y2 - r, x1, y1 + r, x1, y1 + r, x1, y1)
+        return self.cv.create_polygon(pts, smooth=True, **kw)
+
+    def _ls(self, role: str) -> int:
+        return self.fonts[role].metrics("linespace")
+
+    def _wrap(self, parts: list, sep: str, role: str, width: float) -> str:
+        f, lines, line = self.fonts[role], [], ""
+        for p in parts:
+            joined = f"{line}{sep}{p}" if line else p
+            if line and f.measure(joined) > width:
+                lines.append(line)
+                line = p
+            else:
+                line = joined
+        return "\n".join(lines + [line])
+
+    def _fit(self, text: str, role: str, width: float) -> str:
+        f = self.fonts[role]
+        if f.measure(text) <= width:
+            return text
+        while text and f.measure(text + "…") > width:
+            text = text[:-1]
+        return text.rstrip() + "…"
+
+    def _logo(self, px: int) -> Optional[tk.PhotoImage]:
+        """The school globe at the shipped size nearest px (Tk can't resample smoothly)."""
+        if not self.logo_files:
+            return None
+        size = min(self.logo_files, key=lambda k: abs(k - px))
+        if size not in self.logos:
+            try:
+                self.logos[size] = tk.PhotoImage(master=self.cv, file=str(self.logo_files[size]))
+            except tk.TclError:
+                log.exception("Could not load %s", self.logo_files[size])
+                self.logos[size] = None
+        return self.logos[size]
+
+    # ------------------------------------------------------------------ pointer
+
+    def _hot(self, item="current") -> Optional[str]:
+        for t in self.cv.gettags(item):
+            if t.startswith(("act:", "tile:")):
+                return t
+        return None
+
+    def _paint(self, hot: str, on: bool) -> None:
+        fill = self.colors.get(hot)
+        if fill:
+            self.cv.itemconfig(f"face&&{hot}", fill=fill[1] if on else fill[0])
+
+    def _enter(self, e) -> None:
+        hot = self._hot()
+        if hot:
+            self._paint(hot, True)
+            self.cv.config(cursor="hand2")
+
+    def _leave(self, e) -> None:
+        hot = self._hot()
+        if hot:
+            self._paint(hot, False)
+        self.cv.config(cursor="")
+
+    def _rehover(self) -> None:
+        try:
+            px, py = self.cv.winfo_pointerx() - self.cv.winfo_rootx(), self.cv.winfo_pointery() - self.cv.winfo_rooty()
+        except tk.TclError:
+            return
+        for item in reversed(self.cv.find_overlapping(px, py, px, py)):
+            hot = self._hot(item)
+            if hot:
+                self._paint(hot, True)
+                return
+
+    def _click(self, e) -> None:
+        hot = self._hot()
+        if hot and hot.startswith("tile:"):
+            self.actions["tile"](int(hot[5:]))
+        elif hot:
+            self.actions[hot[4:]]()
+
+
 # =============================================================================== the app
 
 class KioskApp:
@@ -441,64 +894,24 @@ class KioskApp:
     # ------------------------------------------------------------------ widgets
 
     def _build_overlay(self) -> None:
-        ov = self.ov = tk.Toplevel(self.root, bg=BG)
+        ov = self.ov = tk.Toplevel(self.root, bg=NAVY_EDGE)
         ov.title("AI Terminal")
         ov.withdraw()
         ov.protocol("WM_DELETE_WINDOW", lambda: None)            # Alt-F4 / close swallowed
         ov.bind("<Alt-F4>", lambda e: "break")
-        inner = tk.Frame(ov, bg=BG)
-        inner.place(relx=0.5, rely=0.5, anchor="center")
-        L = lambda size, **kw: tk.Label(inner, bg=BG, fg=kw.pop("fg", FG), font=(FONT, size, kw.pop("weight", "normal")), **kw)
-        self.ov_badges = L(14, fg=BADGE, weight="bold")
-        self.ov_badges.pack(pady=(0, 6))
-        self.ov_clock = L(64, weight="bold")
-        self.ov_clock.pack()
-        self.ov_title = L(40, weight="bold")
-        self.ov_title.pack(pady=(4, 0))
-        self.ov_sub = L(18, fg=MUTED, wraplength=900, justify="center")
-        self.ov_sub.pack(pady=(4, 12))
-
-        self.ov_primary = tk.Button(inner, font=(FONT, 20, "bold"), bg=ACCENT, fg="#00110f", activebackground=ACCENT,
-                                    relief="flat", padx=24, pady=10, command=self._on_primary)
-        self.ov_primary_shown = False
-
-        self.walk_frame = tk.Frame(inner, bg=BG)
-        tk.Label(self.walk_frame, text="Who's using the machine?", bg=BG, fg=FG, font=(FONT, 18, "bold")).pack()
-        self.walk_list = tk.Listbox(self.walk_frame, font=(FONT, 18), height=8, width=24, activestyle="none",
-                                    exportselection=False)
-        self.walk_list.pack(pady=6)
-        self.walk_list.bind("<Double-Button-1>", lambda e: self._walkup_start())
-        wb = tk.Frame(self.walk_frame, bg=BG)
-        wb.pack()
-        tk.Button(wb, text="Start session", font=(FONT, 16, "bold"), command=self._walkup_start).pack(side="left", padx=6)
-        tk.Button(wb, text="Back", font=(FONT, 16), command=self._walkup_cancel).pack(side="left", padx=6)
-        self.walk_msg = tk.Label(self.walk_frame, bg=BG, fg=BADGE, font=(FONT, 13))
-        self.walk_msg.pack()
-        self.walk_shown = False
-
-        self.ov_sched = tk.Label(inner, bg=BG, fg=FG, font=(MONO, 15), justify="left")
-        self.ov_sched.pack(pady=(14, 4))
-        self.ov_next = L(16, weight="bold")
-        self.ov_next.pack(pady=(0, 10))
-        L(11, fg=MUTED, text=HOUSE_RULES, wraplength=1000, justify="center").pack(pady=(0, 14))
-
-        pf = tk.Frame(inner, bg=BG)
-        pf.pack()
-        tk.Label(pf, text="Teacher passcode", bg=BG, fg=MUTED, font=(FONT, 12)).pack(side="left", padx=(0, 6))
-        self.ov_pass = tk.Entry(pf, show="•", width=14, font=(FONT, 14))
-        self.ov_pass.pack(side="left")
-        self.ov_pass.bind("<Return>", lambda e: self._unlock_from(self.ov_pass, self.ov_pass_msg))
-        tk.Button(pf, text="Unlock", font=(FONT, 12),
-                  command=lambda: self._unlock_from(self.ov_pass, self.ov_pass_msg)).pack(side="left", padx=6)
-        self.ov_pass_msg = tk.Label(inner, bg=BG, fg=BADGE, font=(FONT, 12))
-        self.ov_pass_msg.pack(pady=(4, 0))
+        self.ov_msg = ""                                         # passcode feedback on the lock screen
+        self.lock = LockScreen(ov, {
+            "primary": self._on_primary, "back": self._walkup_cancel, "start": self._walkup_start,
+            "tile": self._walkup_select, "prev": lambda: self._walkup_page(-1),
+            "next": lambda: self._walkup_page(1),
+            "unlock": lambda: self._unlock_from(self.lock.entry, self._ov_say)})
 
     def _build_pill(self) -> None:
         p = self.pill = tk.Toplevel(self.root, bg=BG)
         p.withdraw()
         p.overrideredirect(True)
         p.protocol("WM_DELETE_WINDOW", lambda: None)
-        self.pill_frame = tk.Frame(p, bg=BG, padx=12, pady=8)
+        self.pill_frame = tk.Frame(p, bg=BG, padx=12, pady=8, highlightthickness=1, highlightbackground=LINE)
         self.pill_frame.pack(fill="both", expand=True)
         self.pill_name = tk.Label(self.pill_frame, bg=BG, fg=FG, font=(FONT, 12, "bold"), anchor="w")
         self.pill_name.pack(fill="x")
@@ -510,9 +923,12 @@ class KioskApp:
         self.pill_badges.pack(fill="x")
         btns = self.pill_btns = tk.Frame(self.pill_frame, bg=BG)
         btns.pack(fill="x", pady=(4, 0))
-        self.pill_done = tk.Button(btns, text="I'm done", font=(FONT, 10), command=self._on_done)
-        self.pill_teacher = tk.Button(btns, text="Teacher", font=(FONT, 10), command=self._open_teacher_popup)
-        self.pill_rearm = tk.Button(btns, text="Re-arm kiosk", font=(FONT, 11, "bold"), command=self._do_rearm)
+        flat = dict(relief="flat", bd=0, highlightthickness=0, padx=10, pady=3, bg=TILE_HI, fg=FG,
+                    activebackground=SCHOOL_BLUE, activeforeground=FG)
+        gold = dict(flat, bg=GOLD, fg=ON_GOLD, activebackground=GOLD_HI, activeforeground=ON_GOLD)
+        self.pill_done = tk.Button(btns, text="I'm done", font=(FONT, 10), command=self._on_done, **flat)
+        self.pill_teacher = tk.Button(btns, text="Teacher", font=(FONT, 10), command=self._open_teacher_popup, **flat)
+        self.pill_rearm = tk.Button(btns, text="Re-arm kiosk", font=(FONT, 11, "bold"), command=self._do_rearm, **gold)
         self.pill_btn_mode: Optional[str] = None
 
         # Drag anywhere except a button to move it (it has no title bar). The spot holds for the rest of
@@ -686,71 +1102,67 @@ class KioskApp:
             self._render_status()
 
     def _render_overlay(self, v: core.View) -> None:
-        self.ov_badges.config(text="   ".join(self._badges(v)))
-        self.ov_clock.config(text=fmt_time(v.now, seconds=True))
-        blk = v.block
+        blk, w = v.block, self.walkup
         slot_txt = (f"{core.slot_code(self.cache, blk.cls, v.slot)} · {fmt_time(blk.slot_start(v.slot))}–{fmt_time(blk.slot_end(v.slot))}"
                     if v.slot else f"{core.block_label(self.cache, blk.cls)} · {fmt_time(blk.start)}–{fmt_time(blk.end)}")
-        primary = None
+        picking = bool(w and w["stage"] == "picking")
+        m = {"clock": fmt_time(v.now, seconds=True), "badges": self._badges(v), "slot": slot_txt,
+             "pass_msg": self._pass_msg(), "picking": picking, "icon": "lock", "status": "Locked", "name": None,
+             "note": None, "countdown": None, "primary": None}
         if v.mode == core.RESERVED:
-            self.ov_title.config(text=f"Reserved for {v.reserved_name or 'a booking'}", fg=FG)
+            m.update(icon="person", status="Reserved for", name=v.reserved_name or "a booking",
+                     primary="Start my session")
             if v.no_show_at:
                 left = (v.no_show_at - v.now).total_seconds()
-                self.ov_sub.config(text=f"{slot_txt}\nTap Start within {fmt_left(left)} or the slot releases")
+                m["countdown"] = f"Tap Start within {fmt_left(left)} or the slot releases"
             else:
-                self.ov_sub.config(text=f"{slot_txt}\nTap Start when you're here")
-            primary = "Start my session"
+                m["note"] = "Tap Start when you're here"
+        elif v.walkup_allowed:
+            # A free slot: any student in this block starts a walk-up themselves (logged), no teacher.
+            m.update(icon="open", status="Open for walk-ups",
+                     note="Checking the schedule…" if w and w["stage"] == "checking" else OPEN_NOTES.get(v.note, v.note))
+            if not w:
+                m["primary"] = "Start a walk-up session"
         else:
-            self.ov_title.config(text="LOCKED", fg=FG)
-            w = self.walkup
-            if w and w["stage"] == "checking":
-                self.ov_sub.config(text=f"{slot_txt}\nChecking the schedule…")
-            else:
-                self.ov_sub.config(text=f"{slot_txt}\n{v.note}")
-            if v.walkup_allowed and not w:
-                primary = "Walk-up: use this slot now"
+            # Nothing can start right now: before or after the block's slots, or a blocked slot.
+            m["note"] = (f"Walk-ups and bookings start at {fmt_time(blk.start)}" if v.slot is None and v.now < blk.start
+                         else v.note)
+        m["rows"] = [(core.slot_code(self.cache, blk.cls, r.i), fmt_time(r.start), row_label(r), row_kind(r),
+                      r.i == v.slot) for r in v.rows]
+        nu = v.next_up
+        m["next_up"] = "Next up  ·  " + (f"{fmt_time(nu.start)}  ·  {nu.name or 'Booked'}" if nu and nu.status == "booked"
+                                         else f"{fmt_time(nu.start)}  ·  Blocked" if nu else "nothing booked")
+        m.update(names=[p.get("displayName", "?") for p in self.walk_people] if picking else [],
+                 sel=w.get("sel") if picking else None, page=w.get("page", 0) if picking else 0,
+                 pick_msg=w.get("msg", "") if picking else "")
+        self.lock.render(m)
 
-        if primary:
-            self.ov_primary.config(text=primary)
-            if not self.ov_primary_shown:
-                self.ov_primary.pack(before=self.ov_sched, pady=6)
-                self.ov_primary_shown = True
-        elif self.ov_primary_shown:
-            self.ov_primary.pack_forget()
-            self.ov_primary_shown = False
-
-        picking = bool(self.walkup and self.walkup["stage"] == "picking")
-        if picking and not self.walk_shown:
-            self.walk_frame.pack(before=self.ov_sched, pady=6)
-            self.walk_shown = True
-        elif not picking and self.walk_shown:
-            self.walk_frame.pack_forget()
-            self.walk_shown = False
-        if picking and time.monotonic() - self.walkup["since"] > WALKUP_PICK_TIMEOUT:
+        if picking and time.monotonic() - w["since"] > WALKUP_PICK_TIMEOUT:
             self._walkup_cancel()
         if self.walkup and self.walkup["stage"] == "checking" and \
                 time.monotonic() - self.walkup["since"] > WALKUP_CHECK_TIMEOUT:
             log.info("Walk-up re-fetch timed out — proceeding from cache (offline)")
             self._walkup_to_picking()
 
-        lines = []
-        for r in v.rows:
-            mark = "▶" if r.i == v.slot else " "
-            lines.append(f"{mark} {core.slot_code(self.cache, blk.cls, r.i)}  {fmt_time(r.start):>8}  {row_label(r)}")
-        self.ov_sched.config(text="\n".join(lines) if lines else "")
-        nu = v.next_up
-        self.ov_next.config(text=(f"Next: {fmt_time(nu.start)} — {nu.name or 'Booked'}" if nu and nu.status == "booked"
-                                  else f"Next: {fmt_time(nu.start)} — Blocked" if nu
-                                  else "Next: nothing booked"))
+    def _pass_msg(self) -> str:
         if time.time() < self.lockout_until:
-            self.ov_pass_msg.config(text=f"Too many tries — wait {int(self.lockout_until - time.time()) + 1} s")
+            return f"Too many tries — wait {int(self.lockout_until - time.time()) + 1} s"
+        return self.ov_msg
+
+    def _ov_say(self, text: str) -> None:
+        self.ov_msg = text
+        self._rerender()
+
+    def _rerender(self) -> None:
+        if self.view is not None and self.view.mode in (core.LOCKED, core.RESERVED):
+            self._render_overlay(self.view)
 
     def _render_pill(self, v: core.View) -> None:
         key = "teacher" if v.mode == core.TEACHER else v.session["id"]
         if key != self.pill_pos_key:                # new session or teacher mode → back to the top-right
             self.pill_pos_key, self.pill_pos, self.pill_grab = key, None, None
         if v.mode == core.TEACHER:
-            color = "#1e3a8a"
+            color = SCHOOL_BLUE
             self.pill_name.config(text="Teacher mode — kiosk unlocked")
             self.pill_time.config(text=fmt_time(v.now))
             nxt = "Re-arm when done · auto re-arms at the next block"
@@ -836,7 +1248,7 @@ class KioskApp:
             except (KeyError, tk.TclError):
                 focused = None
             if focused is None:
-                (self.walk_list if self.walk_shown else self.ov_pass).focus_force()
+                self.lock.entry.focus_force()
         except tk.TclError:
             log.exception("overlay enforce failed")
 
@@ -930,24 +1342,34 @@ class KioskApp:
             return
         people = core.roster_for(self.cache, v.block.cls)
         self.walk_people = people
-        self.walk_list.delete(0, "end")
-        for p in people:
-            self.walk_list.insert("end", p.get("displayName", "?"))
-        self.walk_msg.config(text="" if people else "No roster cached yet — ask your teacher.")
-        self.walkup.update(stage="picking", since=time.monotonic())
+        self.walkup.update(stage="picking", since=time.monotonic(), sel=None, page=0,
+                           msg="" if people else "No roster cached yet — ask your teacher.")
         self._render_overlay(v)
-        self.walk_list.focus_set()
+
+    def _walkup_select(self, i: int) -> None:
+        w = self.walkup
+        if w and w["stage"] == "picking" and 0 <= i < len(self.walk_people):
+            w.update(sel=i, msg="", since=time.monotonic())        # a tap keeps the picker open
+            self._rerender()
+
+    def _walkup_page(self, step: int) -> None:
+        w = self.walkup
+        if w and w["stage"] == "picking":
+            last = max(0, (len(self.walk_people) - 1) // NAMES_PER_PAGE)
+            w.update(page=min(last, max(0, w.get("page", 0) + step)), since=time.monotonic())
+            self._rerender()
 
     def _walkup_start(self) -> None:
-        v = self.view
-        sel = self.walk_list.curselection()
-        if not self.walkup or not sel:
-            self.walk_msg.config(text="Tap your name first.")
+        v, w = self.view, self.walkup
+        if not w or w["stage"] != "picking" or w.get("sel") is None:
+            if w:
+                w["msg"] = "Tap your name first."
+                self._rerender()
             return
-        if v is None or v.mode != core.LOCKED or not v.walkup_allowed or core.slot_key(v.block, v.slot) != self.walkup["key"]:
+        if v is None or v.mode != core.LOCKED or not v.walkup_allowed or core.slot_key(v.block, v.slot) != w["key"]:
             self.walkup = None
             return
-        p = self.walk_people[sel[0]]
+        p = self.walk_people[w["sel"]]
         st, evs = core.start_session(datetime.now(), self.state, v.block, v.slot, "walkup", p.get("rosterId"),
                                      p.get("displayName", ""), self._sched_today())
         log.info("Walk-up started: %s %s%s", p.get("displayName"), v.block.cls, v.slot)
@@ -957,8 +1379,7 @@ class KioskApp:
 
     def _walkup_cancel(self) -> None:
         self.walkup = None
-        if self.view is not None and self.view.mode in (core.LOCKED, core.RESERVED):
-            self._render_overlay(self.view)
+        self._rerender()
 
     def _on_done(self) -> None:
         if not self.done_armed_at:
@@ -973,26 +1394,27 @@ class KioskApp:
 
     # ------------------------------------------------------------------ teacher actions
 
-    def _check_passcode(self, entry: tk.Entry, msg: tk.Label) -> bool:
+    def _check_passcode(self, entry: tk.Entry, say) -> bool:
+        """say(text) shows feedback next to the field the passcode was typed into."""
         typed = entry.get()
         entry.delete(0, "end")
         if time.time() < self.lockout_until:
-            msg.config(text=f"Too many tries — wait {int(self.lockout_until - time.time()) + 1} s")
+            say(f"Too many tries — wait {int(self.lockout_until - time.time()) + 1} s")
             return False
         if typed and hmac.compare_digest(typed.encode("utf-8"), str(self.cfg["passcode"]).encode("utf-8")):
             self.bad_tries = 0
-            msg.config(text="")
+            say("")
             return True
         self.bad_tries += 1
         log.warning("Wrong passcode attempt (%d)", self.bad_tries)
         if self.bad_tries >= MAX_PASSCODE_TRIES:
             self.bad_tries = 0
             self.lockout_until = time.time() + PASSCODE_LOCKOUT_SEC
-        msg.config(text="Wrong passcode")
+        say("Wrong passcode")
         return False
 
-    def _unlock_from(self, entry: tk.Entry, msg: tk.Label) -> None:
-        if not self._check_passcode(entry, msg):
+    def _unlock_from(self, entry: tk.Entry, say) -> None:
+        if not self._check_passcode(entry, say):
             return
         v = self.view
         st, evs = core.enter_teacher(datetime.now(), self.state, v.block if v else None)
@@ -1012,10 +1434,11 @@ class KioskApp:
         e = tk.Entry(t, show="•", width=16, font=(FONT, 14))
         e.pack(pady=6)
         m = tk.Label(t, fg="#b45309")
-        e.bind("<Return>", lambda ev: self._unlock_from(e, m))
+        say = lambda text: m.config(text=text)  # noqa: E731
+        e.bind("<Return>", lambda ev: self._unlock_from(e, say))
         row = tk.Frame(t)
         row.pack()
-        tk.Button(row, text="Unlock", command=lambda: self._unlock_from(e, m)).pack(side="left", padx=4)
+        tk.Button(row, text="Unlock", command=lambda: self._unlock_from(e, say)).pack(side="left", padx=4)
         tk.Button(row, text="Cancel", command=self._close_teacher_popup).pack(side="left", padx=4)
         m.pack()
         t.update_idletasks()
@@ -1053,7 +1476,7 @@ class KioskApp:
         self.st_pass.focus_force()
 
     def _status_arm(self) -> None:
-        if not self._check_passcode(self.st_pass, self.st_msg):
+        if not self._check_passcode(self.st_pass, lambda text: self.st_msg.config(text=text)):
             return
         v = self.view
         if v is not None and v.mode == core.TEACHER:
@@ -1067,7 +1490,7 @@ class KioskApp:
                                (f" {nxt:%a} {fmt_time(nxt)}." if nxt else "."))
 
     def _status_quit(self) -> None:
-        if not self._check_passcode(self.st_pass, self.st_msg):
+        if not self._check_passcode(self.st_pass, lambda text: self.st_msg.config(text=text)):
             return
         st, evs = core.end_session_now(datetime.now(), self.state)
         self._commit(st, evs)

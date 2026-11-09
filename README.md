@@ -279,7 +279,7 @@ Check it on a phone. The grid shows the next 5 school days; book a test slot wit
   - `agent.log`: errors and events. Look here first if anything is odd.
 - **Updating:** run `git pull` in `C:\kiosk`, then quit the agent from the status window and start it again. `config.json` is untouched.
 
-**First run inside an armed window with no cache yet:** the kiosk shows LOCKED + OFFLINE, walk-ups only, until the first successful poll. That is expected.
+**First run inside an armed window with no cache yet:** the kiosk shows OPEN + OFFLINE, walk-ups only, until the first successful poll. That is expected.
 
 ---
 
@@ -301,14 +301,14 @@ That arms 11:15–12:55 with B1 at 11:20, B2 at 11:35, … B6 at 12:35, using to
 Re-add the test students (`addTestStudents`), then check off each item (SPEC §11.4):
 
 - [ ] Book on a phone → email arrives → cancel from the email link → rebook the same day.
-- [ ] Don't start a booked session: at **+5:00** the slot releases to LOCKED and a `no_show` row appears in the **Log** tab (the booking's status becomes `no-show`).
-- [ ] Walk-up claim from LOCKED: tap the walk-up button, pick a test name, and the session starts (Log-only, `walkup_start`).
-- [ ] Walk-up re-fetch catches a just-made booking: while the kiosk shows LOCKED for, say, B3, book **B3** on a phone (its real 1:30 PM time is still in the future), then tap walk-up right away. The button fetches first, so the kiosk switches to **RESERVED** for the booker instead.
+- [ ] Don't start a booked session: at **+5:00** the slot releases (the screen reads **OPEN**) and a `no_show` row appears in the **Log** tab (the booking's status becomes `no-show`).
+- [ ] Walk-up with no teacher: on the **OPEN** screen tap **Start a walk-up session**, tap a test name, then **Start as …**. The session starts and a `walkup_start` row appears in the **Log** tab (then `session_end` with the minutes when it ends).
+- [ ] Walk-up re-fetch catches a just-made booking: while the kiosk shows OPEN for, say, B3, book **B3** on a phone (its real 1:30 PM time is still in the future), then tap walk-up right away. The button fetches first, so the kiosk switches to **RESERVED** for the booker instead.
 - [ ] Overtime bumped by a just-in-time phone booking: run a session into empty slots, then book the next slot on a phone with under 30 s left. The pill turns red and locks **30 s after the kiosk sees it**.
 - [ ] Drag the pill away from the top-right during a session: it stays where you put it, including when it turns orange/red, and can't be dragged off the screen. The next session starts it back in the top-right.
 - [ ] Hard lock at block end.
-- [ ] **Win+D** during LOCKED: the lock screen is back within ~1 s.
-- [ ] Second monitor (Extend mode) is blacked out while LOCKED.
+- [ ] **Win+D** while the lock screen is up: it's back within ~1 s.
+- [ ] Second monitor (Extend mode) is blacked out while the lock screen is up.
 - [ ] Kill the agent (Task Manager → end `pythonw.exe`) mid-session. The watchdog relaunches it within ~5 s into the **same** session.
 - [ ] Pull the network mid-session: timing continues from the cache, **LOG SYNC: n pending** appears after 5 min, then drains when reconnected.
 - [ ] Reboot mid-session: it resumes.
