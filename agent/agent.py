@@ -55,6 +55,7 @@ WALKUP_CHECK_TIMEOUT = 12.0
 WALKUP_PICK_TIMEOUT = 90.0
 MAX_PASSCODE_TRIES = 5
 PASSCODE_LOCKOUT_SEC = 30
+PILL_MARGIN = 16                                # default pill spot: this far in from the top-right corner
 
 IS_WIN = sys.platform == "win32"
 FONT = "Segoe UI" if IS_WIN else "Helvetica"
@@ -374,6 +375,11 @@ def fmt_left(sec: float) -> str:
     return f"{sec // 60}:{sec % 60:02d}"
 
 
+def on_screen(x: int, y: int, w: int, h: int, sw: int, sh: int) -> tuple[int, int]:
+    """Clamp a w×h window's top-left so all of it stays on an sw×sh screen."""
+    return max(0, min(x, sw - w)), max(0, min(y, sh - h))
+
+
 def row_label(r: core.SlotRow) -> str:
     return {"open": "Open", "blocked": "Blocked", "past": "—", "released": "Released", "done": "Released",
             "no-show": "Released", "unknown": "?"}.get(r.status, r.name or "Booked")
@@ -508,6 +514,17 @@ class KioskApp:
         self.pill_teacher = tk.Button(btns, text="Teacher", font=(FONT, 10), command=self._open_teacher_popup)
         self.pill_rearm = tk.Button(btns, text="Re-arm kiosk", font=(FONT, 11, "bold"), command=self._do_rearm)
         self.pill_btn_mode: Optional[str] = None
+
+        # Drag anywhere except a button to move it (it has no title bar). The spot holds for the rest of
+        # that session or teacher mode; the next one starts back in the top-right corner.
+        p.config(cursor="fleur")                    # children inherit the move cursor…
+        for b in (self.pill_done, self.pill_teacher, self.pill_rearm):
+            b.config(cursor="arrow")                # …except the buttons
+        p.bind("<ButtonPress-1>", self._pill_drag_start)     # a Toplevel binding fires for all its children
+        p.bind("<B1-Motion>", self._pill_drag_move)
+        self.pill_pos: Optional[tuple] = None       # dragged top-left; None = default top-right
+        self.pill_pos_key: Optional[str] = None     # session id or "teacher" the spot belongs to
+        self.pill_grab: Optional[tuple] = None      # pointer offset inside the pill while dragging
 
     def _build_status(self) -> None:
         w = self.status_win = tk.Toplevel(self.root)
@@ -729,6 +746,9 @@ class KioskApp:
             self.ov_pass_msg.config(text=f"Too many tries — wait {int(self.lockout_until - time.time()) + 1} s")
 
     def _render_pill(self, v: core.View) -> None:
+        key = "teacher" if v.mode == core.TEACHER else v.session["id"]
+        if key != self.pill_pos_key:                # new session or teacher mode → back to the top-right
+            self.pill_pos_key, self.pill_pos, self.pill_grab = key, None, None
         if v.mode == core.TEACHER:
             color = "#1e3a8a"
             self.pill_name.config(text="Teacher mode — kiosk unlocked")
@@ -827,8 +847,9 @@ class KioskApp:
                 p.deiconify()
             p.update_idletasks()
             w, h = max(300, p.winfo_reqwidth()), p.winfo_reqheight()
-            x = p.winfo_screenwidth() - w - 16
-            geo = f"{w}x{h}+{x}+16"
+            sw, sh = p.winfo_screenwidth(), p.winfo_screenheight()
+            x, y = on_screen(*(self.pill_pos or (sw - w - PILL_MARGIN, PILL_MARGIN)), w, h, sw, sh)
+            geo = f"{w}x{h}+{x}+{y}"
             if p.geometry() != geo:
                 p.geometry(geo)
             p.attributes("-topmost", True)
@@ -838,6 +859,21 @@ class KioskApp:
                 self.teacher_popup.lift()
         except tk.TclError:
             log.exception("pill enforce failed")
+
+    def _pill_drag_start(self, e: tk.Event) -> None:
+        if isinstance(e.widget, tk.Button):         # a press on a button is a click, not a drag
+            self.pill_grab = None
+            return
+        self.pill_grab = (e.x_root - self.pill.winfo_rootx(), e.y_root - self.pill.winfo_rooty())
+
+    def _pill_drag_move(self, e: tk.Event) -> None:
+        if self.pill_grab is None:
+            return
+        p = self.pill
+        gx, gy = self.pill_grab
+        self.pill_pos = on_screen(e.x_root - gx, e.y_root - gy, p.winfo_width(), p.winfo_height(),
+                                  p.winfo_screenwidth(), p.winfo_screenheight())
+        p.geometry("+%d+%d" % self.pill_pos)
 
     def _update_blackouts(self, on: bool) -> None:
         regions = Platform.extra_display_regions() if (on and not self.windowed) else []
@@ -983,7 +1019,12 @@ class KioskApp:
         tk.Button(row, text="Cancel", command=self._close_teacher_popup).pack(side="left", padx=4)
         m.pack()
         t.update_idletasks()
-        t.geometry(f"+{t.winfo_screenwidth() - t.winfo_reqwidth() - 16}+{self.pill.winfo_reqheight() + 32}")
+        # Next to the pill, wherever it was dragged: right-aligned under it, or above it near the bottom.
+        p, tw, th, sw, sh = self.pill, t.winfo_reqwidth(), t.winfo_reqheight(), t.winfo_screenwidth(), t.winfo_screenheight()
+        below = p.winfo_rooty() + p.winfo_height() + PILL_MARGIN
+        y = below if below + th + 2 * PILL_MARGIN <= sh else p.winfo_rooty() - th - 3 * PILL_MARGIN   # room for a title bar
+        x, y = on_screen(p.winfo_rootx() + p.winfo_width() - tw, y, tw, th, sw, sh)
+        t.geometry(f"+{x}+{y}")
         e.focus_force()
         t.after(60000, self._close_teacher_popup)
 
