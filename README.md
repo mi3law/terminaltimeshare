@@ -305,6 +305,7 @@ Re-add the test students (`addTestStudents`), then check off each item (SPEC §1
 - [ ] Walk-up claim from LOCKED: tap the walk-up button, pick a test name, and the session starts (Log-only, `walkup_start`).
 - [ ] Walk-up re-fetch catches a just-made booking: while the kiosk shows LOCKED for, say, B3, book **B3** on a phone (its real 1:30 PM time is still in the future), then tap walk-up right away. The button fetches first, so the kiosk switches to **RESERVED** for the booker instead.
 - [ ] Overtime bumped by a just-in-time phone booking: run a session into empty slots, then book the next slot on a phone with under 30 s left. The pill turns red and locks **30 s after the kiosk sees it**.
+- [ ] Drag the pill away from the top-right during a session: it stays where you put it, including when it turns orange/red, and can't be dragged off the screen. The next session starts it back in the top-right.
 - [ ] Hard lock at block end.
 - [ ] **Win+D** during LOCKED: the lock screen is back within ~1 s.
 - [ ] Second monitor (Extend mode) is blacked out while LOCKED.
