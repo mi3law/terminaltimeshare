@@ -190,6 +190,37 @@ class Platform:
             regions.append((0, ph, pw, vy + vh - ph))               # below primary
         return [r for r in regions if r[2] > 0 and r[3] > 0]
 
+    monitor_api_ok = True                                    # turned off after the first failure (no log spam)
+
+    @classmethod
+    def monitor_area(cls, x: int, y: int, w: int, h: int) -> Optional[tuple[int, int, int, int]]:
+        """(left, top, right, bottom) of the work area (taskbar excluded) of the monitor holding most of
+        this rectangle, or of the nearest monitor if it's on none. None off Windows or if the call fails."""
+        if not IS_WIN or not cls.monitor_api_ok:
+            return None
+        import ctypes
+        from ctypes import wintypes
+
+        class MONITORINFO(ctypes.Structure):
+            _fields_ = [("cbSize", wintypes.DWORD), ("rcMonitor", wintypes.RECT),
+                        ("rcWork", wintypes.RECT), ("dwFlags", wintypes.DWORD)]
+        try:
+            u32 = ctypes.windll.user32
+            u32.MonitorFromRect.argtypes = [ctypes.POINTER(wintypes.RECT), wintypes.DWORD]
+            u32.MonitorFromRect.restype = wintypes.HMONITOR
+            u32.GetMonitorInfoW.argtypes = [wintypes.HMONITOR, ctypes.POINTER(MONITORINFO)]
+            u32.GetMonitorInfoW.restype = wintypes.BOOL
+            mon = u32.MonitorFromRect(ctypes.byref(wintypes.RECT(x, y, x + w, y + h)), 2)  # MONITOR_DEFAULTTONEAREST
+            info = MONITORINFO(cbSize=ctypes.sizeof(MONITORINFO))
+            if not mon or not u32.GetMonitorInfoW(mon, ctypes.byref(info)):
+                raise OSError("MonitorFromRect / GetMonitorInfoW failed")
+            r = info.rcWork
+            return r.left, r.top, r.right, r.bottom
+        except Exception:
+            log.exception("Monitor lookup failed; the pill stays on the primary screen from now on")
+            cls.monitor_api_ok = False
+            return None
+
 
 # =============================================================================== single instance
 
@@ -400,9 +431,10 @@ def fmt_left(sec: float) -> str:
     return f"{sec // 60}:{sec % 60:02d}"
 
 
-def on_screen(x: int, y: int, w: int, h: int, sw: int, sh: int) -> tuple[int, int]:
-    """Clamp a w×h window's top-left so all of it stays on an sw×sh screen."""
-    return max(0, min(x, sw - w)), max(0, min(y, sh - h))
+def on_screen(x: int, y: int, w: int, h: int, area: tuple) -> tuple[int, int]:
+    """Clamp a w×h window's top-left so all of it stays inside area = (left, top, right, bottom)."""
+    left, top, right, bottom = area
+    return max(left, min(x, right - w)), max(top, min(y, bottom - h))
 
 
 def row_label(r: core.SlotRow) -> str:
@@ -1259,8 +1291,9 @@ class KioskApp:
                 p.deiconify()
             p.update_idletasks()
             w, h = max(300, p.winfo_reqwidth()), p.winfo_reqheight()
-            sw, sh = p.winfo_screenwidth(), p.winfo_screenheight()
-            x, y = on_screen(*(self.pill_pos or (sw - w - PILL_MARGIN, PILL_MARGIN)), w, h, sw, sh)
+            x, y = self.pill_pos or (p.winfo_screenwidth() - w - PILL_MARGIN, PILL_MARGIN)
+            # Fully on the monitor holding most of it; back onto another one if that monitor goes away.
+            x, y = on_screen(x, y, w, h, self._monitor_of(x, y, w, h))
             geo = f"{w}x{h}+{x}+{y}"
             if p.geometry() != geo:
                 p.geometry(geo)
@@ -1271,6 +1304,10 @@ class KioskApp:
                 self.teacher_popup.lift()
         except tk.TclError:
             log.exception("pill enforce failed")
+
+    def _monitor_of(self, x: int, y: int, w: int, h: int) -> tuple:
+        """Work area of the monitor holding most of this rectangle (the primary screen off Windows)."""
+        return Platform.monitor_area(x, y, w, h) or (0, 0, self.root.winfo_screenwidth(), self.root.winfo_screenheight())
 
     def _pill_drag_start(self, e: tk.Event) -> None:
         if isinstance(e.widget, tk.Button):         # a press on a button is a click, not a drag
@@ -1283,8 +1320,9 @@ class KioskApp:
             return
         p = self.pill
         gx, gy = self.pill_grab
+        # The pill goes to whichever monitor the pointer is on, fully on it (never straddling two).
         self.pill_pos = on_screen(e.x_root - gx, e.y_root - gy, p.winfo_width(), p.winfo_height(),
-                                  p.winfo_screenwidth(), p.winfo_screenheight())
+                                  self._monitor_of(e.x_root, e.y_root, 1, 1))
         p.geometry("+%d+%d" % self.pill_pos)
 
     def _update_blackouts(self, on: bool) -> None:
@@ -1442,11 +1480,13 @@ class KioskApp:
         tk.Button(row, text="Cancel", command=self._close_teacher_popup).pack(side="left", padx=4)
         m.pack()
         t.update_idletasks()
-        # Next to the pill, wherever it was dragged: right-aligned under it, or above it near the bottom.
-        p, tw, th, sw, sh = self.pill, t.winfo_reqwidth(), t.winfo_reqheight(), t.winfo_screenwidth(), t.winfo_screenheight()
-        below = p.winfo_rooty() + p.winfo_height() + PILL_MARGIN
-        y = below if below + th + 2 * PILL_MARGIN <= sh else p.winfo_rooty() - th - 3 * PILL_MARGIN   # room for a title bar
-        x, y = on_screen(p.winfo_rootx() + p.winfo_width() - tw, y, tw, th, sw, sh)
+        # Next to the pill, on its monitor: right-aligned under it, or above it near the bottom.
+        p, tw, th = self.pill, t.winfo_reqwidth(), t.winfo_reqheight()
+        px, py, pw, ph = p.winfo_rootx(), p.winfo_rooty(), p.winfo_width(), p.winfo_height()
+        area = self._monitor_of(px, py, pw, ph)
+        below = py + ph + PILL_MARGIN
+        y = below if below + th + 2 * PILL_MARGIN <= area[3] else py - th - 3 * PILL_MARGIN   # room for a title bar
+        x, y = on_screen(px + pw - tw, y, tw, th, area)
         t.geometry(f"+{x}+{y}")
         e.focus_force()
         t.after(60000, self._close_teacher_popup)
