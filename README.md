@@ -305,7 +305,7 @@ Re-add the test students (`addTestStudents`), then check off each item (SPEC §1
 - [ ] Walk-up with no teacher: on the **OPEN** screen tap **Start a walk-up session**, tap a test name, then **Start as …**. The session starts and a `walkup_start` row appears in the **Log** tab (then `session_end` with the minutes when it ends).
 - [ ] Walk-up re-fetch catches a just-made booking: while the kiosk shows OPEN for, say, B3, book **B3** on a phone (its real 1:30 PM time is still in the future), then tap walk-up right away. The button fetches first, so the kiosk switches to **RESERVED** for the booker instead.
 - [ ] Overtime bumped by a just-in-time phone booking: run a session into empty slots, then book the next slot on a phone with under 30 s left. The pill turns red and locks **30 s after the kiosk sees it**.
-- [ ] Drag the pill away from the top-right during a session: it stays where you put it, including when it turns orange/red, and can't be dragged off the screen. The next session starts it back in the top-right.
+- [ ] Drag the pill away from the top-right during a session: it stays where you put it, including when it turns orange/red, and can't be dragged off the screen. Drag it onto the **second monitor** too: it moves across and stays fully on that screen. The next session starts it back in the top-right of the main screen.
 - [ ] Hard lock at block end.
 - [ ] **Win+D** while the lock screen is up: it's back within ~1 s.
 - [ ] Second monitor (Extend mode) is blacked out while the lock screen is up.
